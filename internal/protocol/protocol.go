@@ -65,7 +65,12 @@ type Protocol interface {
 	// model lives in the URL (gemini).
 	Match(method, path string) (op Operation, model string, ok bool)
 	// Suffix is the path appended to a provider's base_url for an operation.
+	// base_url is what the protocol's official SDK takes as its base URL, so
+	// the suffix carries the version for anthropic and gemini but not for
+	// the OpenAI protocols, whose SDK base URL already ends in /v1.
 	Suffix(op Operation, model string) string
+	// ModelsSuffix is the path of the provider's model list.
+	ModelsSuffix() string
 	// ModelFromBody extracts the model name from a request body.
 	ModelFromBody(body []byte) (string, error)
 	// SetModel rewrites the model name in place (sjson point update).
@@ -86,7 +91,7 @@ type Protocol interface {
 	NewUsageParser(op Operation, stream bool) UsageParser
 	// ErrorBody renders a verbatim-generated error in the native shape (design 10).
 	ErrorBody(status int, code, msg string) []byte
-	// ModelList parses the body of GET {base_url}/models. hasMore and lastID
+	// ModelList parses the body of the model list. hasMore and lastID
 	// drive Anthropic-style pagination (?after_id=).
 	ModelList(body []byte) (ids []string, hasMore bool, lastID string)
 }

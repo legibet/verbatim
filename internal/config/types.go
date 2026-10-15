@@ -34,7 +34,7 @@ type Server struct {
 // Provider is one upstream endpoint speaking exactly one protocol.
 type Provider struct {
 	Type    string `yaml:"type"`     // chat | responses | anthropic | gemini
-	BaseURL string `yaml:"base_url"` // includes any version prefix
+	BaseURL string `yaml:"base_url"` // the base URL the protocol's official SDK takes
 	Key     string `yaml:"key"`
 	Auth    string `yaml:"auth"` // bearer | x-api-key | x-goog-api-key | none; Load fills the per-type default
 	// Headers are applied after client headers are copied and before Auth.

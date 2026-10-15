@@ -41,10 +41,12 @@ func (geminiProtocol) Match(method, path string) (Operation, string, bool) {
 // does not carry whether the client called streamGenerateContent.
 func (geminiProtocol) Suffix(op Operation, model string) string {
 	if op == CountTokens {
-		return "/models/" + model + ":countTokens"
+		return "/v1beta/models/" + model + ":countTokens"
 	}
-	return "/models/" + model + ":generateContent"
+	return "/v1beta/models/" + model + ":generateContent"
 }
+
+func (geminiProtocol) ModelsSuffix() string { return "/v1beta/models" }
 
 // ModelFromBody returns "" and no error: the model is in the URL.
 func (geminiProtocol) ModelFromBody([]byte) (string, error) { return "", nil }

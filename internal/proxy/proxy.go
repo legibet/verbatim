@@ -183,7 +183,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"display_name"`
 		CreatedAt   string `json:"created_at"`
 	}
-	names := h.models.Names()
+	names := h.models.Names(r.Context())
 	data := make([]model, 0, len(names))
 	for _, n := range names {
 		data = append(data, model{ID: n, Object: "model", OwnedBy: "verbatim", Type: "model", DisplayName: n, CreatedAt: "1970-01-01T00:00:00Z"})
@@ -211,7 +211,7 @@ func (h *Handler) listGeminiModels(w http.ResponseWriter, r *http.Request) {
 		Name        string `json:"name"`
 		DisplayName string `json:"displayName"`
 	}
-	names := h.models.Names()
+	names := h.models.Names(r.Context())
 	list := make([]model, 0, len(names))
 	for _, n := range names {
 		list = append(list, model{Name: "models/" + n, DisplayName: n})

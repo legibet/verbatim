@@ -9,14 +9,17 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+
 	"verbatim/internal/protocol"
 )
 
 // usageTee feeds a copy of the committed body to the protocol's usage
 // parser. A parser panic drops the parser and never reaches the request.
 //
-// A gzip or deflate body is decompressed for the parser only (design 4.3).
-// The stdlib decompressors pull from a reader while the tee is pushed to, so
+// A compressed body is decompressed for the parser only (design 4.3).
+// The decompressors pull from a reader while the tee is pushed to, so
 // a decoder goroutine runs the decompressor and hands its output back; the
 // parser is only ever called from the caller's goroutine. write returns once
 // the decoder asks for the next chunk, so the parser has then seen everything
@@ -30,22 +33,45 @@ type usageTee struct {
 	done chan struct{} // closed when the decoder has exited
 }
 
-// newUsageTee prepares the tee for a response with the given headers. A
-// content encoding other than gzip and deflate is not inspected: the tee gets
-// no parser and usage stays null.
-func newUsageTee(p protocol.UsageParser, header http.Header) *usageTee {
-	t := &usageTee{p: p}
-	var open func(io.Reader) (io.Reader, error)
+// decoder returns how to decompress a body with the response's
+// Content-Encoding. open is nil for an unencoded body; ok is false for an
+// encoding verbatim cannot read, which includes a stack of several.
+func decoder(header http.Header) (open func(io.Reader) (io.ReadCloser, error), ok bool) {
 	switch strings.ToLower(strings.TrimSpace(strings.Join(header.Values("Content-Encoding"), ","))) {
 	case "", "identity":
-		return t
+		return nil, true
 	case "gzip", "x-gzip":
-		open = func(r io.Reader) (io.Reader, error) { return gzip.NewReader(r) }
+		return func(r io.Reader) (io.ReadCloser, error) { return gzip.NewReader(r) }, true
 	case "deflate":
 		// HTTP "deflate" is the zlib format (RFC 9110 section 8.4.1.2).
-		open = func(r io.Reader) (io.Reader, error) { return zlib.NewReader(r) }
-	default:
+		return zlib.NewReader, true
+	case "br":
+		return func(r io.Reader) (io.ReadCloser, error) { return io.NopCloser(brotli.NewReader(r)), nil }, true
+	case "zstd":
+		return func(r io.Reader) (io.ReadCloser, error) {
+			// RFC 9659 caps the window of the zstd content coding at 8 MiB;
+			// one synchronous decoder per body.
+			d, err := zstd.NewReader(r, zstd.WithDecoderMaxWindow(8<<20), zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
+			if err != nil {
+				return nil, err
+			}
+			return d.IOReadCloser(), nil
+		}, true
+	}
+	return nil, false
+}
+
+// newUsageTee prepares the tee for a response with the given headers. An
+// encoding decoder cannot read is not inspected: the tee gets no parser and
+// usage stays null.
+func newUsageTee(p protocol.UsageParser, header http.Header) *usageTee {
+	t := &usageTee{p: p}
+	open, ok := decoder(header)
+	switch {
+	case !ok:
 		t.p = nil
+		return t
+	case open == nil:
 		return t
 	}
 	t.in, t.out, t.done = make(chan []byte), make(chan []byte), make(chan struct{})
@@ -55,12 +81,13 @@ func newUsageTee(p protocol.UsageParser, header http.Header) *usageTee {
 
 // decode runs the decompressor until the body ends or turns out to be
 // corrupt; the parser keeps whatever it was fed before.
-func (t *usageTee) decode(open func(io.Reader) (io.Reader, error)) {
+func (t *usageTee) decode(open func(io.Reader) (io.ReadCloser, error)) {
 	defer close(t.done)
 	r, err := open(&chunkReader{in: t.in, out: t.out})
 	if err != nil {
 		return
 	}
+	defer r.Close()
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := r.Read(buf)

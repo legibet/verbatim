@@ -31,7 +31,7 @@ func newProvider(t *testing.T, pages map[string]string) *provider {
 		h := r.Header.Clone()
 		p.header.Store(&h)
 		body, ok := pages[r.URL.Query().Get("after_id")]
-		if p.fail.Load() || r.URL.Path != "/models" || !ok {
+		if p.fail.Load() || !strings.HasSuffix(r.URL.Path, "/models") || !ok {
 			w.WriteHeader(500)
 			return
 		}
@@ -92,7 +92,7 @@ routes:
 	if want := []string{"anth", "chat", "gem"}; !slices.Equal(c.providers, want) {
 		t.Fatalf("providers to fetch = %v, want %v", c.providers, want)
 	}
-	if got := c.Names(); !slices.Equal(got, []string{"kimi-k3"}) {
+	if got := c.Names(context.Background()); !slices.Equal(got, []string{"kimi-k3"}) {
 		t.Errorf("before any fetch: %v", got)
 	}
 	for _, name := range c.providers {
@@ -105,7 +105,7 @@ routes:
 	// anth's gpt-6 is listed under gpt-* because anth is a target there too;
 	// gemini ids lose their models/ prefix.
 	want := []string{"kimi-k3", "gpt-5", "gpt-6", "claude-a", "claude-b", "claude-c", "gemini-x"}
-	if got := c.Names(); !slices.Equal(got, want) {
+	if got := c.Names(context.Background()); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
 	}
 	if rewrite.header.Load() != nil || unused.header.Load() != nil {
@@ -132,7 +132,7 @@ routes:
 	if err := c.refresh(context.Background(), "chat"); err == nil {
 		t.Error("refresh of a failing provider succeeded")
 	}
-	if got := c.Names(); !slices.Equal(got, want) {
+	if got := c.Names(context.Background()); !slices.Equal(got, want) {
 		t.Errorf("after a failed refresh: %v", got)
 	}
 }
@@ -153,14 +153,8 @@ routes:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c.Start(ctx)
-	deadline := time.Now().Add(5 * time.Second)
-	for len(c.Names()) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("cache was not warmed")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := c.Names(); !slices.Equal(got, []string{"m-1"}) {
+	// Names called right after Start waits for the first fetch.
+	if got := c.Names(context.Background()); !slices.Equal(got, []string{"m-1"}) {
 		t.Errorf("Names() = %v", got)
 	}
 }
@@ -195,7 +189,7 @@ routes:
 	if err := c.refresh(context.Background(), "p"); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Names(); !slices.Equal(got, []string{"m-1", "m-2"}) {
+	if got := c.Names(context.Background()); !slices.Equal(got, []string{"m-1", "m-2"}) {
 		t.Errorf("Names() = %v", got)
 	}
 	if got := asked.Load(); got != "gzip" {

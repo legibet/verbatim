@@ -83,10 +83,10 @@ func TestSuffix(t *testing.T) {
 	}{
 		{Chat, Create, "", "/chat/completions"},
 		{Responses, Create, "", "/responses"},
-		{Anthropic, Create, "", "/messages"},
-		{Anthropic, CountTokens, "", "/messages/count_tokens"},
-		{Gemini, Create, "gemini-3.1-pro", "/models/gemini-3.1-pro:generateContent"},
-		{Gemini, CountTokens, "gemini-3.1-pro", "/models/gemini-3.1-pro:countTokens"},
+		{Anthropic, Create, "", "/v1/messages"},
+		{Anthropic, CountTokens, "", "/v1/messages/count_tokens"},
+		{Gemini, Create, "gemini-3.1-pro", "/v1beta/models/gemini-3.1-pro:generateContent"},
+		{Gemini, CountTokens, "gemini-3.1-pro", "/v1beta/models/gemini-3.1-pro:countTokens"},
 	}
 	for _, tt := range tests {
 		if got := Lookup(tt.id).Suffix(tt.op, tt.model); got != tt.want {

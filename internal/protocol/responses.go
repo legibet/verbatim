@@ -20,6 +20,8 @@ func (responsesProtocol) Match(method, path string) (Operation, string, bool) {
 
 func (responsesProtocol) Suffix(Operation, string) string { return "/responses" }
 
+func (responsesProtocol) ModelsSuffix() string { return "/models" }
+
 func (responsesProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
 func (responsesProtocol) DefaultHeaders(http.Header) {}

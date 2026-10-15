@@ -2,8 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"compress/gzip"
-	"compress/zlib"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -340,6 +338,8 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			a.Error = err.Error()
 			x.attempts = append(x.attempts, a)
 			x.verdict(c.Provider, probe, true)
+			h.log.Warn("upstream request failed", "provider", c.Provider, "url", req.URL.Redacted(),
+				"err", err, "request_id", x.row.RequestID)
 			failures = append(failures, c.Provider+": "+err.Error())
 			last = nil
 			continue
@@ -366,8 +366,9 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		failures = append(failures, fmt.Sprintf("%s: HTTP %d", c.Provider, resp.StatusCode))
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-			h.log.Warn("upstream refused the request; failing over",
-				"provider", c.Provider, "upstream_model", c.Model, "status", resp.StatusCode, "request_id", x.row.RequestID)
+			h.log.Warn("upstream refused the request; check the provider's key, base_url and model name",
+				"provider", c.Provider, "url", req.URL.Redacted(), "upstream_model", c.Model, "status", resp.StatusCode,
+				"request_id", x.row.RequestID)
 		}
 		if x.r.Context().Err() != nil {
 			// The client left while the failed body was read: nothing more is
@@ -675,7 +676,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 	}
 	tee.close()
 	if needOwner {
-		// A gzip decoder may hold the end of a body, and with it the id of a
+		// A decoder may hold the end of a body, and with it the id of a
 		// non-streamed response, until its input has ended.
 		recordOwner()
 	}
@@ -788,23 +789,22 @@ func (b *idleBody) stop() {
 	}
 }
 
-// excerpt returns the first max bytes of an error body for the log. A gzip
-// or deflate body is decompressed first, so the excerpt is readable; a
-// truncated or corrupt compressed body yields what could be decoded.
+// excerpt returns the first max bytes of an error body for the log. A
+// compressed body is decompressed first, so the excerpt is readable; a
+// truncated or corrupt one yields what could be decoded, and one in an
+// encoding verbatim cannot read yields nothing.
 func excerpt(body []byte, header http.Header, max int) string {
 	var r io.Reader = bytes.NewReader(body)
-	switch strings.ToLower(strings.TrimSpace(header.Get("Content-Encoding"))) {
-	case "gzip", "x-gzip":
-		zr, err := gzip.NewReader(r)
+	open, ok := decoder(header)
+	if !ok {
+		return ""
+	}
+	if open != nil {
+		zr, err := open(r)
 		if err != nil {
 			return ""
 		}
-		r = zr
-	case "deflate":
-		zr, err := zlib.NewReader(r)
-		if err != nil {
-			return ""
-		}
+		defer zr.Close()
 		r = zr
 	}
 	out, _ := io.ReadAll(io.LimitReader(r, int64(max)))

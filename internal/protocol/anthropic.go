@@ -31,10 +31,12 @@ func (anthropicProtocol) Match(method, path string) (Operation, string, bool) {
 
 func (anthropicProtocol) Suffix(op Operation, _ string) string {
 	if op == CountTokens {
-		return "/messages/count_tokens"
+		return "/v1/messages/count_tokens"
 	}
-	return "/messages"
+	return "/v1/messages"
 }
+
+func (anthropicProtocol) ModelsSuffix() string { return "/v1/models" }
 
 func (anthropicProtocol) DefaultAuth() AuthScheme { return AuthXAPIKey }
 

@@ -31,7 +31,8 @@ const (
 )
 
 // Cache holds the model list of every provider that discovery reads and
-// refreshes each one in the background. Readers never wait on a provider.
+// refreshes each one in the background. Readers wait only for the first
+// round of fetches after Start, never on a refresh.
 type Cache struct {
 	cfg       *config.Config
 	routes    *route.Table
@@ -42,6 +43,7 @@ type Cache struct {
 
 	mu    sync.Mutex
 	lists map[string]list
+	warm  chan struct{} // closed when Start's first round of fetches has ended
 }
 
 type list struct {
@@ -86,15 +88,32 @@ func discovers(r config.Route) bool {
 // Start fetches every list in the background now and again every TTL until
 // ctx is done. A failed fetch keeps the previous list and logs a warning.
 func (c *Cache) Start(ctx context.Context) {
+	warm := make(chan struct{})
+	c.mu.Lock()
+	c.warm = warm
+	c.mu.Unlock()
+	var wg sync.WaitGroup
 	for _, name := range c.providers {
-		go c.keepFresh(ctx, name)
+		wg.Add(1)
+		go c.keepFresh(ctx, name, wg.Done)
 	}
+	go func() {
+		wg.Wait()
+		close(warm)
+	}()
 }
 
-func (c *Cache) keepFresh(ctx context.Context, name string) {
+// keepFresh refreshes one provider's list until ctx is done, calling warmed
+// once the first fetch has ended.
+func (c *Cache) keepFresh(ctx context.Context, name string, warmed func()) {
 	for {
 		wait := c.ttl
-		if err := c.refresh(ctx, name); err != nil {
+		err := c.refresh(ctx, name)
+		if warmed != nil {
+			warmed()
+			warmed = nil
+		}
+		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -125,21 +144,22 @@ func (c *Cache) refresh(ctx context.Context, name string) error {
 	return nil
 }
 
-// fetch reads GET {base_url}/models, following has_more through ?after_id=
+// fetch reads the provider's model list, following has_more through ?after_id=
 // for at most maxPages pages.
 func (c *Cache) fetch(ctx context.Context, p config.Provider) ([]string, error) {
 	proto := protocol.Lookup(protocol.ID(p.Type))
 	var all []string
 	after := ""
 	for page := 1; page <= maxPages; page++ {
-		u := p.BaseURL + "/models"
+		u := p.BaseURL + proto.ModelsSuffix()
 		if after != "" {
 			u += "?after_id=" + url.QueryEscape(after)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			return nil, fmt.Errorf("models page %d: %w", page, err)
+			return nil, err
 		}
+		where := "GET " + req.URL.Redacted()
 		proto.DefaultHeaders(req.Header)
 		Authorize(req.Header, p)
 		// A configured Accept-Encoding would stop the transport from
@@ -148,19 +168,19 @@ func (c *Cache) fetch(ctx context.Context, p config.Provider) ([]string, error) 
 		req.Header.Del("Accept-Encoding")
 		resp, err := c.transport.RoundTrip(req)
 		if err != nil {
-			return nil, fmt.Errorf("models page %d: %w", page, err)
+			return nil, fmt.Errorf("%s: %w", where, err)
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxListBytes))
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("models page %d: %w", page, err)
+			return nil, fmt.Errorf("%s: %w", where, err)
 		}
 		if resp.StatusCode/100 != 2 {
-			return nil, fmt.Errorf("models page %d: HTTP %d", page, resp.StatusCode)
+			return nil, fmt.Errorf("%s: HTTP %d", where, resp.StatusCode)
 		}
 		ids, more, last := proto.ModelList(body)
 		if ids == nil {
-			return nil, fmt.Errorf("models page %d: response is not a model list", page)
+			return nil, fmt.Errorf("%s: response is not a model list", where)
 		}
 		all = append(all, ids...)
 		if !more {
@@ -176,7 +196,21 @@ func (c *Cache) fetch(ctx context.Context, p config.Provider) ([]string, error) 
 // contributes the names its rewrite-free targets' providers list that match
 // the pattern and that routing would send to this route for that target's
 // protocol. The first occurrence of a name wins.
-func (c *Cache) Names() []string {
+//
+// A call made while Start's first round of fetches is still running waits
+// for it, or until ctx is done, so that a client asking right after startup
+// gets the full listing; models.timeout bounds that round.
+func (c *Cache) Names(ctx context.Context) []string {
+	c.mu.Lock()
+	warm := c.warm
+	c.mu.Unlock()
+	if warm != nil {
+		select {
+		case <-warm:
+		case <-ctx.Done():
+		}
+	}
+
 	c.mu.Lock()
 	lists := make(map[string][]string, len(c.lists))
 	for name, l := range c.lists {

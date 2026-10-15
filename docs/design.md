@@ -56,13 +56,13 @@ For a forwarded request, verbatim:
 
 1. Reads the full client body into memory. The body is needed for retries, for the model rewrite, and for the affinity key. Requests above `server.max_body_bytes` (default 32 MiB) are rejected with 413. `server.max_inflight` (default 64) bounds the number of concurrent requests and therefore total buffered memory; excess requests get 503 in native format.
 2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For `gemini` the model is in the URL and the body step is skipped. Deserializing the body into a struct is never done, so unknown fields survive.
-3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix (`/chat/completions`, `/responses`, `/messages`, `/messages/count_tokens`, `/models/{model}:generateContent`, ...) + the client's query string. A provider's `base_url` therefore includes any version prefix the provider uses (`https://api.deepseek.com/v1`, `https://api.deepseek.com/anthropic`, `https://generativelanguage.googleapis.com/v1beta`).
+3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat` and `responses` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
 4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`, `x-goog-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's authentication header per its `auth` setting; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
 5. Sends the request and streams the response back.
 
 ### 4.3 Response forwarding
 
-Response status, headers (except hop-by-hop), trailers, and body are copied to the client unchanged. The transport is configured not to request or transparently decompress content encodings, so what the provider sends is what the client gets. Server-sent events are copied as they arrive, with a flush after every write. verbatim observes the response body through a bounded tee that extracts usage and the response id for the log (section 11.3); the tee never modifies what the client receives, and a parse failure in the tee never affects forwarding. When the upstream response carries `Content-Encoding: gzip` or `deflate`, the tee decompresses its own copy; the client still receives the compressed bytes. Other encodings are not inspected and yield null usage.
+Response status, headers (except hop-by-hop), trailers, and body are copied to the client unchanged. The transport is configured not to request or transparently decompress content encodings, so what the provider sends is what the client gets. Server-sent events are copied as they arrive, with a flush after every write. verbatim observes the response body through a bounded tee that extracts usage and the response id for the log (section 11.3); the tee never modifies what the client receives, and a parse failure in the tee never affects forwarding. When the upstream response carries `Content-Encoding` `gzip`, `deflate`, `br`, or `zstd`, the tee decompresses its own copy; the client still receives the compressed bytes. All four matter in practice: clients advertise them (Node's fetch sends `gzip, deflate, br, zstd`) and providers use them for streams (DeepSeek answers that header with `zstd`), and the tee is also where the response id that Responses ownership needs is read. Other encodings, and stacked encodings, are not inspected and yield null usage.
 
 The point of no return is when verbatim commits the upstream status and headers to the client. After that, nothing is retried: a cut stream is forwarded as a cut stream and the client connection is aborted rather than closed cleanly, so the client's SDK sees an error instead of a truncated success. An error event inside a `200` stream is forwarded as is.
 
@@ -141,9 +141,9 @@ providers:
     key: ${MOONSHOT_KEY}
   openrouter-anthropic:
     type: anthropic
-    base_url: https://openrouter.ai/api/v1
+    base_url: https://openrouter.ai/api
     key: ${OPENROUTER_KEY}
-    auth: bearer                     # OpenRouter's Messages endpoint takes Authorization: Bearer
+    auth: bearer                     # send the key as Authorization: Bearer instead of x-api-key
   relay-a-chat:
     type: chat
     base_url: https://relay.example/v1
@@ -225,7 +225,7 @@ A provider is one upstream endpoint speaking exactly one protocol. A relay that 
 | Field | Required | Meaning |
 |---|---|---|
 | `type` | yes | `chat`, `responses`, `anthropic`, or `gemini` |
-| `base_url` | yes | Prefix to which the operation's fixed suffix is appended |
+| `base_url` | yes | The base URL the protocol's official SDK takes; the operation's fixed suffix is appended (section 4.2) |
 | `key` | unless `auth: none` | Provider API key |
 | `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, `x-goog-api-key`, or `none`. Default by type: `chat` and `responses` use `bearer`, `anthropic` uses `x-api-key`, `gemini` uses `x-goog-api-key`. |
 | `headers` | no | Map of header name to string (set) or `null` (remove), applied after client headers are copied and before `auth` |
@@ -278,7 +278,7 @@ Many clients populate their model picker from `/v1/models`, so the list has to b
 
 Names are deduplicated; the first occurrence wins. The response lists names only; it does not promise that every listed name works for every protocol.
 
-Provider lists come from `GET {base_url}/models` for every protocol type (for `gemini`, ids are returned with the `models/` prefix stripped). Anthropic-style paginated lists are followed through `has_more` up to 10 pages. Lists are cached per provider for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints only read the cache and never wait on a provider.
+Provider lists come from `GET {base_url}` + the protocol's model-list suffix (section 4.2) for every protocol type (for `gemini`, ids are returned with the `models/` prefix stripped). Anthropic-style paginated lists are followed through `has_more` up to 10 pages. Lists are cached per provider for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the startup round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup does not get an empty list.
 
 Response shape: one entry per name carrying the union of what OpenAI and Anthropic clients read, so either parser is satisfied and ignores the rest:
 
@@ -534,7 +534,7 @@ JSON API, all `GET`: `/ui/api/requests` (filters and cursor pagination), `/ui/ap
 
 This section is guidance for the implementer, not a contract. Sections 4 through 13 define behavior; anything here may change if a cleaner way to get that behavior turns up.
 
-Language: Go (1.27, the current release). Dependencies, kept deliberately short: `tidwall/gjson` and `tidwall/sjson` for point access to JSON, `modernc.org/sqlite` (pure Go, no cgo, keeps the single static binary), `gopkg.in/yaml.v3` with `KnownFields(true)` so unknown configuration keys are errors. Everything else is the standard library: `log/slog` for logging, `net/http` ServeMux method-and-pattern routing, `flag` with hand-written subcommand dispatch for the CLI (no cobra), `text/tabwriter` for CLI tables, `database/sql` with hand-written SQL and a `user_version`-based migration list, `go:embed` for the UI. Tests use `testing` and `net/http/httptest` with fake upstreams; the failover, affinity, and usage-parsing behavior is where the tests go.
+Language: Go (1.27, the current release). Dependencies, kept deliberately short: `tidwall/gjson` and `tidwall/sjson` for point access to JSON, `modernc.org/sqlite` (pure Go, no cgo, keeps the single static binary), `gopkg.in/yaml.v3` with `KnownFields(true)` so unknown configuration keys are errors, `klauspost/compress/zstd` and `andybalholm/brotli` (decoders only, for the tee of section 4.3; the standard library has neither). Everything else is the standard library: `log/slog` for logging, `net/http` ServeMux method-and-pattern routing, `flag` with hand-written subcommand dispatch for the CLI (no cobra), `text/tabwriter` for CLI tables, `database/sql` with hand-written SQL and a `user_version`-based migration list, `go:embed` for the UI. Tests use `testing` and `net/http/httptest` with fake upstreams; the failover, affinity, and usage-parsing behavior is where the tests go.
 
 Forwarding is built on `net/http/httputil.ReverseProxy`, which already handles hop-by-hop headers, headers named by `Connection`, trailers, `FlushInterval: -1` streaming, and client-cancellation propagation. The parts verbatim owns:
 
@@ -568,6 +568,7 @@ type Protocol interface {
     ID() string
     Match(method, path string) (op Operation, model string, ok bool)   // model only for gemini
     Suffix(op Operation, model string) string                          // path appended to base_url
+    ModelsSuffix() string                                              // model-list path appended to base_url
     ModelFromBody(body []byte) (string, error)
     SetModel(body []byte, model string) ([]byte, error)               // no-op for gemini
     DefaultAuth() AuthScheme

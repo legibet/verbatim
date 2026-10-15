@@ -31,9 +31,12 @@ server:
 # providers: one upstream endpoint, speaking exactly one protocol.
 #
 # A relay that offers several protocols is several providers, usually sharing
-# a key. base_url includes the provider's version prefix; verbatim appends
-# only the operation suffix (/chat/completions, /responses, /messages,
-# /messages/count_tokens, /models).
+# a key. base_url is the base URL that protocol's official SDK takes, as the
+# provider documents it (what you would put in OPENAI_BASE_URL or
+# ANTHROPIC_BASE_URL). verbatim appends only the operation suffix:
+#   chat, responses: /chat/completions, /responses, /models
+#                    (the OpenAI SDK base URL already ends in /v1)
+#   anthropic:       /v1/messages, /v1/messages/count_tokens, /v1/models
 # ---------------------------------------------------------------------------
 providers:
   openai-responses:
@@ -50,7 +53,7 @@ providers:
 
   anthropic:
     type: anthropic
-    base_url: https://api.anthropic.com/v1
+    base_url: https://api.anthropic.com
     key: ${ANTHROPIC_KEY}
 
   moonshot-anthropic:               # Moonshot's native Anthropic Messages endpoint
@@ -64,9 +67,9 @@ providers:
 
   openrouter-anthropic:
     type: anthropic
-    base_url: https://openrouter.ai/api/v1
+    base_url: https://openrouter.ai/api
     key: ${OPENROUTER_KEY}
-    auth: bearer                    # OpenRouter's /messages takes Authorization: Bearer
+    auth: bearer                    # send the key as Authorization: Bearer instead of x-api-key
     headers:                        # applied after the client's headers, before auth
       http-referer: https://verbatim.local
       x-title: verbatim
@@ -174,7 +177,8 @@ breaker:
 # ---------------------------------------------------------------------------
 models:
   cache_ttl: 10m                    # default
-  timeout: 3s                       # default; per fetch; clients never wait on it
+  timeout: 3s                       # default; per fetch. Clients never wait on a refresh,
+                                    # only on the first round right after startup.
 
 # ---------------------------------------------------------------------------
 # log: the SQLite request log (one row per request, no bodies).

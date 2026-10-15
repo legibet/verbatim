@@ -48,7 +48,7 @@ verbatim serve
 
 # Chat Completions
 curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $VERBATIM_KEY" \
+  -H "Authorization: Bearer $VERBATIM_KEY" -H "Content-Type: application/json" \
   -d '{"model":"kimi-k3","messages":[{"role":"user","content":"hi"}]}'
 
 # Claude Code
@@ -105,4 +105,4 @@ cd web && pnpm install && pnpm dev     # UI dev server; proxies /ui/api to $VERB
 cd web && pnpm build                   # writes internal/ui/dist; commit the result
 ```
 
-Dependencies are deliberately few: `gjson`/`sjson` for point edits of JSON bodies, `modernc.org/sqlite` (pure Go), `yaml.v3`, and the standard library.
+Dependencies are deliberately few: `gjson`/`sjson` for point edits of JSON bodies, `modernc.org/sqlite` (pure Go), `yaml.v3`, `klauspost/compress/zstd` and `andybalholm/brotli` (to read usage from zstd and br responses), and the standard library.

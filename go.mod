@@ -3,6 +3,8 @@ module verbatim
 go 1.27.2
 
 require (
+	github.com/andybalholm/brotli v1.2.6
+	github.com/klauspost/compress v1.20.1
 	github.com/tidwall/gjson v1.20.0
 	github.com/tidwall/sjson v1.2.5
 	gopkg.in/yaml.v3 v3.0.1

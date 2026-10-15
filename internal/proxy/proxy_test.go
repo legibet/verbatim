@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/tidwall/gjson"
 
 	"verbatim/internal/affinity"
@@ -326,17 +328,42 @@ func testPrices(t *testing.T, model string) *pricing.Table {
 	return prices
 }
 
+// compressor returns a writer in the given content coding.
+func compressor(t *testing.T, encoding string, w io.Writer) interface {
+	io.WriteCloser
+	Flush() error
+} {
+	t.Helper()
+	switch encoding {
+	case "gzip":
+		return gzip.NewWriter(w)
+	case "deflate":
+		return zlib.NewWriter(w)
+	case "br":
+		return brotli.NewWriter(w)
+	case "zstd":
+		zw, err := zstd.NewWriter(w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return zw
+	}
+	t.Fatalf("no compressor for %q", encoding)
+	return nil
+}
+
 // The client gets an encoded body unchanged; the tee decodes its own copy of
-// gzip and deflate, and inspects no other encoding (design 4.3).
+// gzip, deflate, br and zstd, and inspects no other encoding (design 4.3).
 func TestCompressedBodyUsage(t *testing.T) {
 	const body = `{"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`
-	var gz, zl bytes.Buffer
-	zw := gzip.NewWriter(&gz)
-	io.WriteString(zw, body)
-	zw.Close()
-	fw := zlib.NewWriter(&zl)
-	io.WriteString(fw, body)
-	fw.Close()
+	compressed := func(encoding string) []byte {
+		var b bytes.Buffer
+		w := compressor(t, encoding, &b)
+		io.WriteString(w, body)
+		w.Close()
+		return b.Bytes()
+	}
+	gz := bytes.NewBuffer(compressed("gzip"))
 	// A reserved block type right after the gzip header.
 	corrupt := slices.Concat(gz.Bytes()[:10], []byte{0xff, 0xff}, gz.Bytes()[12:])
 
@@ -347,8 +374,11 @@ func TestCompressedBodyUsage(t *testing.T) {
 	}{
 		{"gzip", "gzip", gz.Bytes(), true},
 		{"x-gzip", "X-GZip", gz.Bytes(), true},
-		{"deflate", "deflate", zl.Bytes(), true},
-		{"br", "br", []byte(body), false}, // readable, but labelled with an encoding the tee does not decode
+		{"deflate", "deflate", compressed("deflate"), true},
+		{"br", "br", compressed("br"), true},
+		{"zstd", "zstd", compressed("zstd"), true},
+		{"unknown", "compress", []byte(body), false}, // readable, but labelled with an encoding the tee does not decode
+		{"stacked", "gzip, br", []byte(body), false},
 		{"corrupt gzip", "gzip", corrupt, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -362,11 +392,11 @@ routes:
   - model: m
     targets: [{provider: a}]
 `, func(o *Options) { o.Pricing = testPrices(t, "m") })
-			res := g.post(t, "/v1/chat/completions", chatBody, "Accept-Encoding", "gzip, deflate, br")
+			res := g.post(t, "/v1/chat/completions", chatBody, "Accept-Encoding", "gzip, deflate, br, zstd")
 			if res.status != 200 || res.body != string(tc.body) || res.header.Get("Content-Encoding") != tc.encoding {
 				t.Fatalf("client got %d, Content-Encoding %q, body %q", res.status, res.header.Get("Content-Encoding"), res.body)
 			}
-			if got := up.last().header.Get("Accept-Encoding"); got != "gzip, deflate, br" {
+			if got := up.last().header.Get("Accept-Encoding"); got != "gzip, deflate, br, zstd" {
 				t.Errorf("upstream Accept-Encoding = %q", got)
 			}
 			row := g.row(t, res.rid)
@@ -389,9 +419,15 @@ routes:
 	}
 }
 
-// A gzipped Responses stream, flushed per event: usage is extracted and the
-// owner is recorded before the client has the bytes that reveal the id.
-func TestGzipStreamUsageAndOwnership(t *testing.T) {
+// A compressed Responses stream, flushed per event: usage is extracted and
+// the owner is recorded before the client has the bytes that reveal the id.
+func TestCompressedStreamUsageAndOwnership(t *testing.T) {
+	for _, enc := range []string{"gzip", "br", "zstd"} {
+		t.Run(enc, func(t *testing.T) { testCompressedStream(t, enc) })
+	}
+}
+
+func testCompressedStream(t *testing.T, encoding string) {
 	events := []string{
 		"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_gz\",\"status\":\"in_progress\"}}\n\n",
 		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
@@ -402,9 +438,9 @@ func TestGzipStreamUsageAndOwnership(t *testing.T) {
 	all := make(chan []byte, 1)
 	up := newUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Encoding", encoding)
 		var sent bytes.Buffer
-		zw := gzip.NewWriter(io.MultiWriter(w, &sent))
+		zw := compressor(t, encoding, io.MultiWriter(w, &sent))
 		for i, e := range events {
 			io.WriteString(zw, e)
 			zw.Flush()
@@ -427,7 +463,7 @@ routes:
 `, func(o *Options) { o.Pricing = testPrices(t, "m") })
 
 	req, _ := http.NewRequest("POST", g.URL+"/v1/responses", strings.NewReader(`{"model":"m","stream":true,"input":"hi"}`))
-	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", encoding)
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
@@ -445,7 +481,7 @@ routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(first)+string(rest), string(<-all); got != want || resp.Header.Get("Content-Encoding") != "gzip" {
+	if got, want := string(first)+string(rest), string(<-all); got != want || resp.Header.Get("Content-Encoding") != encoding {
 		t.Errorf("client body or Content-Encoding (%q) changed", resp.Header.Get("Content-Encoding"))
 	}
 
@@ -1125,7 +1161,7 @@ routes:
 
 	g.post(t, "/v1/messages?beta=true", `{"model":"a"}`, "X-Api-Key", "client-key")
 	got = ups["anth"].last()
-	if got.path != "/anthropic/messages" || got.query != "beta=true" || got.header.Get("X-Api-Key") != "key-anth" ||
+	if got.path != "/anthropic/v1/messages" || got.query != "beta=true" || got.header.Get("X-Api-Key") != "key-anth" ||
 		got.header.Get("Authorization") != "" || got.header.Get("Anthropic-Version") != "2023-06-01" || got.header.Get("Anthropic-Beta") != "from-config" {
 		t.Errorf("anthropic request: %s?%s %v", got.path, got.query, got.header)
 	}
@@ -1135,7 +1171,7 @@ routes:
 	}
 	g.post(t, "/v1/messages/count_tokens", `{"model":"ab"}`, "X-Goog-Api-Key", "client-key")
 	got = ups["anthbearer"].last()
-	if got.path != "/messages/count_tokens" || got.header.Get("Authorization") != "Bearer key-anthbearer" || got.header.Get("X-Api-Key") != "" {
+	if got.path != "/v1/messages/count_tokens" || got.header.Get("Authorization") != "Bearer key-anthbearer" || got.header.Get("X-Api-Key") != "" {
 		t.Errorf("anthropic bearer request: %s %v", got.path, got.header)
 	}
 	g.post(t, "/v1/chat/completions?key=client-key", `{"model":"o"}`)

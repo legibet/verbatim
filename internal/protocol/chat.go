@@ -21,6 +21,8 @@ func (chatProtocol) Match(method, path string) (Operation, string, bool) {
 
 func (chatProtocol) Suffix(Operation, string) string { return "/chat/completions" }
 
+func (chatProtocol) ModelsSuffix() string { return "/models" }
+
 func (chatProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
 func (chatProtocol) DefaultHeaders(http.Header) {}
