@@ -1,0 +1,204 @@
+# verbatim configuration, annotated.
+#
+# Copy to ./verbatim.yaml or ~/.verbatim/verbatim.yaml, then run
+# `verbatim check` to validate and `verbatim serve` to start.
+#
+# Conventions:
+#   - ${VAR} in any string is replaced from the environment at load time.
+#     An unset variable is an error, never an empty string.
+#   - A leading ~/ in a path is your home directory.
+#   - Durations are Go syntax (30s, 10m, 1h30m) plus a "d" suffix (90d).
+#   - Unknown keys are errors. Every value shown with "default" below can be
+#     omitted.
+
+# ---------------------------------------------------------------------------
+# server: where verbatim listens and how clients authenticate.
+# ---------------------------------------------------------------------------
+server:
+  listen: 127.0.0.1:8080            # default. Use 0.0.0.0:8080 to serve the LAN.
+  api_key: ${VERBATIM_KEY}          # Clients send it as "Authorization: Bearer",
+                                    # "x-api-key", "x-goog-api-key", or ?key=.
+                                    # Optional on a loopback address; `check`
+                                    # warns if it is missing elsewhere.
+  max_body_bytes: 33554432          # default 32 MiB; larger requests get 413
+  max_inflight: 64                  # default; concurrent requests above this get 503
+  header_timeout: 60s               # default; waiting for upstream response headers
+  idle_timeout: 120s                # default; upstream body inactivity before the
+                                    # stream is cut (long prompts with big caches can
+                                    # take over a minute to first byte: raise if needed)
+
+# ---------------------------------------------------------------------------
+# providers: one upstream endpoint, speaking exactly one protocol.
+#
+# A relay that offers several protocols is several providers, usually sharing
+# a key. base_url includes the provider's version prefix; verbatim appends
+# only the operation suffix (/chat/completions, /responses, /messages,
+# /messages/count_tokens, /models).
+# ---------------------------------------------------------------------------
+providers:
+  openai-responses:
+    type: responses                 # chat | responses | anthropic | gemini (gemini: not served yet)
+    base_url: https://api.openai.com/v1
+    key: ${OPENAI_KEY}
+    # auth: bearer                  # default by type: chat/responses bearer,
+                                    # anthropic x-api-key, gemini x-goog-api-key.
+                                    # "none" for a local server without a key.
+  openai-chat:
+    type: chat
+    base_url: https://api.openai.com/v1
+    key: ${OPENAI_KEY}
+
+  anthropic:
+    type: anthropic
+    base_url: https://api.anthropic.com/v1
+    key: ${ANTHROPIC_KEY}
+
+  moonshot-anthropic:               # Moonshot's native Anthropic Messages endpoint
+    type: anthropic
+    base_url: https://api.moonshot.ai/anthropic
+    key: ${MOONSHOT_KEY}
+  moonshot-chat:
+    type: chat
+    base_url: https://api.moonshot.ai/v1
+    key: ${MOONSHOT_KEY}
+
+  openrouter-anthropic:
+    type: anthropic
+    base_url: https://openrouter.ai/api/v1
+    key: ${OPENROUTER_KEY}
+    auth: bearer                    # OpenRouter's /messages takes Authorization: Bearer
+    headers:                        # applied after the client's headers, before auth
+      http-referer: https://verbatim.local
+      x-title: verbatim
+
+  relay-chat:                       # a third-party relay with quirks
+    type: chat
+    base_url: https://relay.example/v1
+    key: ${RELAY_KEY}
+    headers:
+      openai-project: null          # null removes a client header the relay rejects
+    overrides:                      # static edits to every request body sent here,
+                                    # applied in order, each attempt from the original
+                                    # client body. Paths are gjson/sjson paths.
+      - delete: metadata            # the relay rejects unknown fields
+      - delete: service_tier
+      - set: {path: temperature, value: 1}
+      # Not allowed: "model" or "stream" anywhere; on anthropic providers also
+      # anything under system/tools/messages (it would break preserved thinking);
+      # two overrides whose paths overlap.
+
+  local-llama:
+    type: chat
+    base_url: http://127.0.0.1:8081/v1
+    auth: none
+
+# ---------------------------------------------------------------------------
+# routes: ordered. A request takes the first route whose `model` matches the
+# client's model name AND which has a target whose provider speaks the
+# request's protocol (a Chat Completions request can only go to a chat
+# provider, and so on; verbatim never converts formats).
+#
+# `model` is a glob: * matches any run of characters, including "/". Put exact
+# names first, patterns after, "*" last. Each route's pattern must be unique.
+# ---------------------------------------------------------------------------
+routes:
+  # Exact name, several upstreams, several protocols. Which target is used
+  # depends on the protocol the client speaks and on priority/weight.
+  - model: kimi-k3
+    targets:
+      - provider: moonshot-anthropic            # Anthropic clients (Claude Code) land here
+      - provider: moonshot-chat                 # Chat clients: 3 of 4 requests here...
+        weight: 3
+      - provider: relay-chat                    # ...and 1 of 4 here, as "kimi-k3-0905"
+        model: kimi-k3-0905                     # upstream model name (literal; default:
+                                                # the client's name unchanged)
+      - provider: openrouter-anthropic          # tried only when every priority-1
+        model: moonshotai/kimi-k3               # target failed or is circuit-open
+        priority: 2
+    # balance: weighted                         # default; or round_robin (weights ignored)
+
+  - model: claude-*
+    targets:
+      - provider: anthropic
+
+  - model: gpt-*
+    targets:
+      - provider: openai-responses
+      - provider: openai-chat
+
+  # Catch-all. discover: false keeps these providers' model lists out of
+  # GET /v1/models (pattern routes discover from their providers by default;
+  # exact-name routes list their own name).
+  - model: "*"
+    discover: false
+    targets:
+      - provider: openrouter-anthropic
+      - provider: local-llama
+
+# ---------------------------------------------------------------------------
+# affinity: keep a session on one upstream (prompt caches, Anthropic thinking
+# signatures, Responses server-side state all live on one upstream).
+#
+# verbatim ships no built-in rules: which request field identifies a session
+# is a property of the client, so it is configuration. The first rule whose
+# `match` fits is used; the first `key` source yielding a value is the key.
+# Without a key, `fallback` applies.
+# ---------------------------------------------------------------------------
+affinity:
+  ttl: 1h                           # default; a pin expires this long after its last use
+  mode: prefer                      # default. prefer: if the pinned upstream fails, fail
+                                    # over and move the pin. strict: return the pinned
+                                    # upstream's failure, try nothing else.
+  rules:
+    - match: {protocol: anthropic}  # Claude Code sends metadata.user_id
+      key: [{body: metadata.user_id}, {header: x-session-affinity}]
+    - match: {protocol: responses}  # Codex sends a session_id header and prompt_cache_key
+      key: [{header: session_id}, {body: prompt_cache_key}]
+    - match: {protocol: chat}
+      key: [{header: x-session-affinity}, {body: prompt_cache_key}, {body: user}]
+    # match may also name a model glob: {protocol: chat, model: "gpt-*"}
+  fallback: prefix_hash             # default: hash of the system prompt and the first
+                                    # user message, as sent. Or "none".
+
+# ---------------------------------------------------------------------------
+# breaker: per-provider circuit breaker. Only "the provider is unhealthy"
+# signals count: no response, 5xx, 529, 429. A 401/403/404 fails over this
+# request but does not count.
+# ---------------------------------------------------------------------------
+breaker:
+  failure_threshold: 3              # default; consecutive counted failures to open
+  cooldown: 30s                     # default; then one probe request is let through
+
+# ---------------------------------------------------------------------------
+# models: the provider model-list cache behind GET /v1/models.
+# ---------------------------------------------------------------------------
+models:
+  cache_ttl: 10m                    # default
+  timeout: 3s                       # default; per fetch; clients never wait on it
+
+# ---------------------------------------------------------------------------
+# log: the SQLite request log (one row per request, no bodies).
+# ---------------------------------------------------------------------------
+log:
+  path: ~/.verbatim/verbatim.db     # default
+  retention: 90d                    # default; older rows are deleted hourly
+  error_excerpt_bytes: 4096         # default; how much of an error body to keep
+
+# ---------------------------------------------------------------------------
+# pricing: list prices used to put a cost on the log. Optional.
+#
+# `verbatim pricing sync` downloads each source (llm-metadata / models.dev
+# provider files) into `cache`. A model is priced by the client's model name,
+# exact match only; `aliases` map a name you expose to a priced name.
+# `overrides` is a local file in the same shape for prices you maintain.
+# ---------------------------------------------------------------------------
+pricing:
+  sources:
+    - https://basellm.github.io/llm-metadata/api/providers/anthropic.json
+    - https://basellm.github.io/llm-metadata/api/providers/openai.json
+    - https://basellm.github.io/llm-metadata/api/providers/moonshotai.json
+  cache: ~/.verbatim/pricing/       # default
+  overrides: ~/.verbatim/pricing-overrides.json   # optional; {"models": {"<name>": {"cost": {...}}}}
+  aliases:
+    claude-opus-5-5-20260301: claude-opus-5-5
+    kimi-k3: kimi-k3-0905

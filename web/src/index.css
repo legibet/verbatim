@@ -1,0 +1,175 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/mona-sans/wdth.css";
+
+/* Commit Mono, woff2 only: the fontsource CSS also ships .woff fallbacks. */
+@font-face {
+  font-family: "Commit Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../node_modules/@fontsource/commit-mono/files/commit-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Commit Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("../node_modules/@fontsource/commit-mono/files/commit-mono-latin-500-normal.woff2") format("woff2");
+}
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/*
+  Ledger palette: warm paper neutrals (hue 85, chroma under 0.01) and ink text.
+  Color is reserved for state: ok, warn (failover, half-open), err (errors,
+  open breaker), info (moved pin).
+*/
+:root {
+  --background: oklch(0.986 0.003 85);
+  --surface: oklch(0.968 0.004 85);
+  --muted: oklch(0.948 0.005 85);
+  --foreground: oklch(0.23 0.008 85);
+  --muted-foreground: oklch(0.5 0.008 85);
+  --faint: oklch(0.74 0.006 85);
+  --border: oklch(0.895 0.005 85);
+  --rule: oklch(0.93 0.004 85);
+  --input: oklch(0.86 0.006 85);
+  --ring: oklch(0.6 0.01 85);
+  --popover: oklch(0.995 0.002 85);
+  --popover-foreground: var(--foreground);
+  --primary: var(--foreground);
+  --primary-foreground: var(--background);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --accent: var(--muted);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--err);
+
+  --ok: oklch(0.6 0.13 150);
+  --warn: oklch(0.72 0.15 70);
+  --err: oklch(0.57 0.19 28);
+  --info: oklch(0.57 0.13 250);
+  --ok-ink: oklch(0.45 0.1 150);
+  --warn-ink: oklch(0.5 0.11 65);
+  --err-ink: oklch(0.5 0.17 28);
+  --info-ink: oklch(0.48 0.12 250);
+  --flash: oklch(0.93 0.04 85);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.175 0.004 85);
+    --surface: oklch(0.2 0.005 85);
+    --muted: oklch(0.245 0.005 85);
+    --foreground: oklch(0.91 0.006 85);
+    --muted-foreground: oklch(0.67 0.008 85);
+    --faint: oklch(0.44 0.006 85);
+    --border: oklch(0.3 0.006 85);
+    --rule: oklch(0.245 0.005 85);
+    --input: oklch(0.34 0.006 85);
+    --ring: oklch(0.55 0.01 85);
+    --popover: oklch(0.22 0.005 85);
+
+    --ok: oklch(0.72 0.14 150);
+    --warn: oklch(0.79 0.14 75);
+    --err: oklch(0.68 0.18 28);
+    --info: oklch(0.7 0.12 250);
+    --ok-ink: oklch(0.78 0.12 150);
+    --warn-ink: oklch(0.82 0.12 75);
+    --err-ink: oklch(0.75 0.15 28);
+    --info-ink: oklch(0.76 0.1 250);
+    --flash: oklch(0.29 0.03 85);
+  }
+}
+
+@theme inline {
+  --font-sans: "Mona Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Commit Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-muted: var(--muted);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-rule: var(--rule);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-info: var(--info);
+  --color-ok-ink: var(--ok-ink);
+  --color-warn-ink: var(--warn-ink);
+  --color-err-ink: var(--err-ink);
+  --color-info-ink: var(--info-ink);
+
+  /* Radius scale: marks 2px, controls 4px, panels 6px. */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    color-scheme: light dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    font-stretch: 96%;
+  }
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* A row that arrived through live polling: a short tint that fades out. */
+@keyframes arrive {
+  from {
+    background-color: var(--flash);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.row-arrived > td {
+  animation: arrive 1.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.live-dot {
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-arrived > td,
+  .live-dot {
+    animation: none;
+  }
+}
