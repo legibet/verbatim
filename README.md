@@ -15,13 +15,13 @@ The design document, `docs/design.md`, is the behavior contract.
 
 ## What it does
 
-- Entry points: `POST /v1/chat/completions`, `POST /v1/responses` and Codex's web search `/v1/alpha/search`, `POST /v1/messages` and `/v1/messages/count_tokens`; `GET /v1/models` assembled from the configuration and the providers' own lists.
+- Entry points: `POST /v1/chat/completions`, `POST /v1/responses` and Codex's web search `/v1/alpha/search`, `POST /v1/messages` and `/v1/messages/count_tokens`, `POST /v1/images/generations` and `/v1/images/edits` (JSON or multipart); `GET /v1/models` assembled from the configuration and the providers' own lists.
 - Routing: ordered routes with glob patterns; targets with priority tiers and weights, weighted or round-robin balancing; a tier is exhausted before the next one is tried.
 - Failover on connection failures and on 408/409/425/429/5xx/529 (and 401/403/404, with a warning), decided before anything is sent to the client. Everything else, including every 400, is returned unchanged.
 - Circuit breaker per provider, with a single half-open probe.
 - Session affinity: the session key comes from request fields you name in the configuration (Claude Code's `metadata.user_id`, Codex's `session-id` header, ...), with a prefix hash as fallback; the pin is reserved before the first attempt so parallel first requests of a session land together. Responses `previous_response_id` is routed to the upstream that produced the id.
 - Per-provider static request overrides for relay quirks (delete a field, set a literal).
-- Request log in SQLite: how each request was routed, every attempt, tokens (input, cache read, cache write, output, reasoning) as the provider reported them, and a cost from configured list prices.
+- Request log in SQLite: how each request was routed, every attempt, tokens (input, cache read, cache write, output, reasoning, image) as the provider reported them, and a cost from configured list prices.
 - CLI for the log and usage; a web UI at `/ui/` for requests, request detail, usage, and live provider state.
 
 Not in version 1: the Gemini entry point (the protocol adapter exists, the entry point is not served), Responses resource operations (`GET /v1/responses/{id}` and friends return 404), per-user keys, quotas, billing.
@@ -68,6 +68,19 @@ wire_api = "responses"
 # Web search for models Codex runs without hosted tools (current GPT models)
 # goes to /alpha/search; it works when the routed upstream serves that path.
 supports_standalone_web_search = true
+# Codex offers its image tool (POST /images/generations and /images/edits with
+# model gpt-image-2) to a custom provider only when this header is set; any
+# non-empty value does, and it is forwarded upstream like any client header.
+# Route gpt-image-2 to an images provider.
+http_headers = { "x-openai-actor-authorization" = "verbatim" }
+
+# Remote compaction: Codex sends a compaction_trigger item on /responses and
+# keeps the compaction item the upstream returns, which only that upstream can
+# read (session affinity keeps the session there). An upstream that does not
+# implement it (DeepSeek) returns no such item and Codex reports an error;
+# without this setting Codex compacts locally.
+[model_providers.verbatim.capabilities]
+remote_compaction = "v2"
 ```
 
 The client's model name picks the route; the client's protocol picks which of the route's targets are eligible.
@@ -110,7 +123,7 @@ verbatim status                          live provider state from the running se
 
 ## Pricing
 
-Costs are configured list prices, nothing more: they cannot know what a relay actually charges. `verbatim pricing sync` fetches llm-metadata / models.dev provider files; a request is priced by the client's model name, exact match only, then by `pricing.aliases`. Requests with no price are counted and listed as such in the UI and in `verbatim usage`.
+Costs are configured list prices, nothing more: they cannot know what a relay actually charges. `verbatim pricing sync` fetches llm-metadata / models.dev provider files; a request is priced by the client's model name, exact match only, then by `pricing.aliases`. Those files have no image token prices: price image models such as `gpt-image-2` in the overrides file, with `image_input` and `image_output` (see `verbatim.example.yaml`). Requests with no price are counted and listed as such in the UI and in `verbatim usage`.
 
 ## Development
 

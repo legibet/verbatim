@@ -12,7 +12,7 @@ func TestAllOrder(t *testing.T) {
 	for _, p := range All {
 		ids = append(ids, p.ID())
 	}
-	if want := []ID{Chat, Responses, Anthropic, Gemini}; !slices.Equal(ids, want) {
+	if want := []ID{Chat, Responses, Anthropic, Gemini, Images}; !slices.Equal(ids, want) {
 		t.Fatalf("All = %v, want %v", ids, want)
 	}
 	for _, id := range ids {
@@ -35,6 +35,8 @@ func TestMatchPath(t *testing.T) {
 		{"POST", "/v1/chat/completions", Chat, Create, ""},
 		{"POST", "/v1/responses", Responses, Create, ""},
 		{"POST", "/v1/alpha/search", Responses, Search, ""},
+		{"POST", "/v1/images/generations", Images, Generate, ""},
+		{"POST", "/v1/images/edits", Images, Edit, ""},
 		{"POST", "/v1/messages", Anthropic, Create, ""},
 		{"POST", "/v1/messages/count_tokens", Anthropic, CountTokens, ""},
 		{"POST", "/v1beta/models/gemini-3.1-pro:generateContent", Gemini, Create, "gemini-3.1-pro"},
@@ -50,6 +52,8 @@ func TestMatchPath(t *testing.T) {
 		{"POST", "/v1/responses/compact", "", "", ""},
 		{"GET", "/v1/alpha/search", "", "", ""},
 		{"POST", "/alpha/search", "", "", ""},
+		{"GET", "/v1/images/generations", "", "", ""},
+		{"POST", "/v1/images/variations", "", "", ""},
 		{"POST", "/v1/messages/", "", "", ""},
 		{"GET", "/v1/messages", "", "", ""},
 		{"POST", "/v1/messages/count_tokens/", "", "", ""},
@@ -87,6 +91,8 @@ func TestSuffix(t *testing.T) {
 		{Chat, Create, "", "/chat/completions"},
 		{Responses, Create, "", "/responses"},
 		{Responses, Search, "", "/alpha/search"},
+		{Images, Generate, "", "/images/generations"},
+		{Images, Edit, "", "/images/edits"},
 		{Anthropic, Create, "", "/v1/messages"},
 		{Anthropic, CountTokens, "", "/v1/messages/count_tokens"},
 		{Gemini, Create, "gemini-3.1-pro", "/v1beta/models/gemini-3.1-pro:generateContent"},
@@ -145,15 +151,15 @@ func TestModelFromBody(t *testing.T) {
 		{`{"metadata":{"model":"x"}}`, "", true},
 		{``, "", true},
 	}
-	for _, id := range []ID{Chat, Responses, Anthropic} {
+	for _, id := range []ID{Chat, Responses, Anthropic, Images} {
 		for _, tt := range tests {
-			got, err := Lookup(id).ModelFromBody([]byte(tt.body))
+			got, err := Lookup(id).ModelFromBody([]byte(tt.body), "application/json")
 			if got != tt.want || (err != nil) != tt.wantErr {
 				t.Errorf("%s ModelFromBody(%s) = %q, %v; want %q, error %v", id, tt.body, got, err, tt.want, tt.wantErr)
 			}
 		}
 	}
-	if got, err := Lookup(Gemini).ModelFromBody([]byte(`{"model":"x"}`)); got != "" || err != nil {
+	if got, err := Lookup(Gemini).ModelFromBody([]byte(`{"model":"x"}`), "application/json"); got != "" || err != nil {
 		t.Errorf("gemini ModelFromBody = %q, %v; want \"\", nil", got, err)
 	}
 }
@@ -169,10 +175,10 @@ func TestSetModel(t *testing.T) {
 			`{"stream":true,"model":"kimi-k3-0905","unknown_field":[1,2,{"b":null}]}`,
 		},
 	}
-	for _, id := range []ID{Chat, Responses, Anthropic} {
+	for _, id := range []ID{Chat, Responses, Anthropic, Images} {
 		for _, tt := range tests {
 			orig := []byte(tt.body)
-			got, err := Lookup(id).SetModel(orig, "kimi-k3-0905")
+			got, err := Lookup(id).SetModel(orig, "application/json", "kimi-k3-0905")
 			if err != nil || string(got) != tt.want {
 				t.Errorf("%s SetModel = %q, %v; want %q", id, got, err, tt.want)
 			}
@@ -182,7 +188,7 @@ func TestSetModel(t *testing.T) {
 		}
 	}
 	body := []byte(`{"contents":[], "model":"x"}`)
-	if got, err := Lookup(Gemini).SetModel(body, "y"); err != nil || !bytes.Equal(got, body) {
+	if got, err := Lookup(Gemini).SetModel(body, "application/json", "y"); err != nil || !bytes.Equal(got, body) {
 		t.Errorf("gemini SetModel = %q, %v; want body unchanged", got, err)
 	}
 }
@@ -200,14 +206,14 @@ func TestStream(t *testing.T) {
 		{`{"model":"m"}`, false},
 		{`{"model":"m","options":{"stream":true}}`, false},
 	}
-	for _, id := range []ID{Chat, Responses, Anthropic} {
+	for _, id := range []ID{Chat, Responses, Anthropic, Images} {
 		for _, tt := range tests {
-			if got := Lookup(id).Stream([]byte(tt.body)); got != tt.want {
+			if got := Lookup(id).Stream([]byte(tt.body), "application/json"); got != tt.want {
 				t.Errorf("%s Stream(%s) = %v, want %v", id, tt.body, got, tt.want)
 			}
 		}
 	}
-	if Lookup(Gemini).Stream([]byte(`{"stream":true}`)) {
+	if Lookup(Gemini).Stream([]byte(`{"stream":true}`), "application/json") {
 		t.Error("gemini Stream = true, want false")
 	}
 }

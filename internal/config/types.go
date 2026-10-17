@@ -33,14 +33,18 @@ type Server struct {
 
 // Provider is one upstream endpoint speaking exactly one protocol.
 type Provider struct {
-	Type    string `yaml:"type"`     // chat | responses | anthropic | gemini
+	Type    string `yaml:"type"`     // chat | responses | anthropic | gemini | images
 	BaseURL string `yaml:"base_url"` // the base URL the protocol's official SDK takes
 	Key     string `yaml:"key"`
 	Auth    string `yaml:"auth"` // bearer | x-api-key | x-goog-api-key | none; Load fills the per-type default
 	// Headers are applied after client headers are copied and before Auth.
 	// A nil value removes the header.
 	Headers   map[string]*string `yaml:"headers"`
-	Overrides []Override         `yaml:"overrides"`
+	Overrides []Override         `yaml:"overrides"` // not allowed on images providers
+	// HeaderTimeout bounds the wait for this provider's response headers;
+	// Load fills server.header_timeout. A non-streamed image is answered
+	// only once it is drawn.
+	HeaderTimeout Duration `yaml:"header_timeout"`
 }
 
 // Override is exactly one of Delete or Set.

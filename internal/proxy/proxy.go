@@ -41,43 +41,54 @@ type Options struct {
 // listings, /healthz, and the Responses operations verbatim rejects. The UI
 // is mounted next to it by the caller.
 type Handler struct {
-	cfg       *config.Config
-	routes    *route.Table
-	breakers  *route.Breakers
-	pins      *affinity.Pins
-	rules     *affinity.Rules
-	store     *store.Store
-	models    *models.Cache
-	pricing   atomic.Pointer[pricing.Table]
-	log       *slog.Logger
-	transport *http.Transport
-	inflight  chan struct{}  // semaphore of server.max_inflight forwarded requests
-	exchanges sync.WaitGroup // forwarded requests that have not yet recorded their row
-	mux       *http.ServeMux
+	cfg      *config.Config
+	routes   *route.Table
+	breakers *route.Breakers
+	pins     *affinity.Pins
+	rules    *affinity.Rules
+	store    *store.Store
+	models   *models.Cache
+	pricing  atomic.Pointer[pricing.Table]
+	log      *slog.Logger
+	// transports holds each provider's transport; providers with the same
+	// header_timeout share one, and with it their idle connections.
+	transports map[string]*http.Transport
+	inflight   chan struct{}  // semaphore of server.max_inflight forwarded requests
+	exchanges  sync.WaitGroup // forwarded requests that have not yet recorded their row
+	mux        *http.ServeMux
 }
 
-// New builds the handler and its upstream transport.
+// New builds the handler and its upstream transports.
 func New(o Options) *Handler {
-	// One shared transport. It never asks for or decodes a content encoding,
-	// so the client gets the provider's bytes, and it is used directly rather
-	// than through a Client, so redirects are forwarded, not followed.
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DisableCompression = true
-	t.ResponseHeaderTimeout = o.Config.Server.HeaderTimeout.Std()
-	t.MaxIdleConnsPerHost = 32
+	// A transport never asks for or decodes a content encoding, so the client
+	// gets the provider's bytes, and it is used directly rather than through
+	// a Client, so redirects are forwarded, not followed.
+	byTimeout := map[time.Duration]*http.Transport{}
+	transports := map[string]*http.Transport{}
+	for name, p := range o.Config.Providers {
+		d := p.HeaderTimeout.Std()
+		if byTimeout[d] == nil {
+			t := http.DefaultTransport.(*http.Transport).Clone()
+			t.DisableCompression = true
+			t.ResponseHeaderTimeout = d
+			t.MaxIdleConnsPerHost = 32
+			byTimeout[d] = t
+		}
+		transports[name] = byTimeout[d]
+	}
 
 	h := &Handler{
-		cfg:       o.Config,
-		routes:    o.Routes,
-		breakers:  o.Breakers,
-		pins:      o.Pins,
-		rules:     o.Rules,
-		store:     o.Store,
-		models:    o.Models,
-		log:       cmp.Or(o.Logger, slog.Default()),
-		transport: t,
-		inflight:  make(chan struct{}, o.Config.Server.MaxInflight),
-		mux:       http.NewServeMux(),
+		cfg:        o.Config,
+		routes:     o.Routes,
+		breakers:   o.Breakers,
+		pins:       o.Pins,
+		rules:      o.Rules,
+		store:      o.Store,
+		models:     o.Models,
+		log:        cmp.Or(o.Logger, slog.Default()),
+		transports: transports,
+		inflight:   make(chan struct{}, o.Config.Server.MaxInflight),
+		mux:        http.NewServeMux(),
 	}
 	h.pricing.Store(o.Pricing)
 

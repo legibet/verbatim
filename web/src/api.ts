@@ -29,6 +29,8 @@ export type RequestRow = {
   cache_write_1h_tokens: number | null
   output_tokens: number | null
   reasoning_tokens: number | null
+  input_image_tokens: number | null // subset of input_tokens (images)
+  output_image_tokens: number | null // subset of output_tokens (images)
   usage_json: string | null
   cost_usd: number | null
   price_key: string | null
@@ -58,8 +60,13 @@ export type Prices = {
   cache_read: number | null
   cache_write: number
   cache_write_1h: number
-  output: number
+  output: number | null // null when the model has no text output price
+  image_input?: number | null // image models only
+  image_output?: number | null
 }
+
+// Auxiliary operations serve a session's create requests and are never priced.
+export const isAuxiliary = (operation: string) => operation === "count_tokens" || operation === "search"
 
 export type Aggregate = {
   key: string

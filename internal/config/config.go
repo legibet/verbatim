@@ -347,14 +347,14 @@ func (c *checker) providers(cfg *Config) {
 
 		var auth string
 		switch p.Type {
-		case "chat", "responses":
+		case "chat", "responses", "images":
 			auth = "bearer"
 		case "anthropic":
 			auth = "x-api-key"
 		case "gemini":
 			auth = "x-goog-api-key"
 		default:
-			c.errorf(path+".type", "must be one of chat, responses, anthropic, gemini, got %q", p.Type)
+			c.errorf(path+".type", "must be one of chat, responses, anthropic, gemini, images, got %q", p.Type)
 		}
 		if p.Auth == "" {
 			p.Auth = auth
@@ -403,6 +403,16 @@ func (c *checker) providers(cfg *Config) {
 			}
 		}
 
+		switch {
+		case p.HeaderTimeout < 0:
+			c.errorf(path+".header_timeout", "must be greater than 0")
+		case p.HeaderTimeout == 0:
+			p.HeaderTimeout = cfg.Server.HeaderTimeout
+		}
+
+		if p.Type == "images" && len(p.Overrides) > 0 {
+			c.errorf(path+".overrides", "not supported on an images provider: overrides edit JSON, and an images request may be multipart")
+		}
 		c.overrides(path, p.Type, p.Overrides)
 		cfg.Providers[name] = p
 	}
@@ -648,9 +658,9 @@ func (c *checker) affinity(cfg *Config) {
 	for i, r := range a.Rules {
 		path := fmt.Sprintf("affinity.rules[%d]", i)
 		switch r.Match.Protocol {
-		case "", "chat", "responses", "anthropic", "gemini":
+		case "", "chat", "responses", "anthropic", "gemini", "images":
 		default:
-			c.errorf(path+".match.protocol", "must be one of chat, responses, anthropic, gemini, got %q", r.Match.Protocol)
+			c.errorf(path+".match.protocol", "must be one of chat, responses, anthropic, gemini, images, got %q", r.Match.Protocol)
 		}
 		if len(r.Key) == 0 {
 			c.errorf(path+".key", "at least one key source is required")

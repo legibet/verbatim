@@ -239,7 +239,7 @@ func TestDefaults(t *testing.T) {
 			HeaderTimeout: Duration(60 * time.Second),
 			IdleTimeout:   Duration(120 * time.Second),
 		},
-		Providers: map[string]Provider{"p": {Type: "chat", BaseURL: "https://example.com/v1", Key: "k", Auth: "bearer"}},
+		Providers: map[string]Provider{"p": {Type: "chat", BaseURL: "https://example.com/v1", Key: "k", Auth: "bearer", HeaderTimeout: Duration(60 * time.Second)}},
 		Routes: []Route{{
 			Model:    "m",
 			Targets:  []Target{{Provider: "p", Priority: 1, Weight: 1}},
@@ -264,14 +264,33 @@ providers:
   r: {type: responses, base_url: "https://x/v1", key: k}
   a: {type: anthropic, base_url: "https://x/anthropic", key: k}
   g: {type: gemini, base_url: "https://x/v1beta", key: k}
+  i: {type: images, base_url: "https://x/v1", key: k}
 routes:
   - model: m
     targets: [{provider: c}]
 `)
-	for name, want := range map[string]string{"c": "bearer", "r": "bearer", "a": "x-api-key", "g": "x-goog-api-key"} {
+	for name, want := range map[string]string{"c": "bearer", "r": "bearer", "a": "x-api-key", "g": "x-goog-api-key", "i": "bearer"} {
 		if got := cfg.Providers[name].Auth; got != want {
 			t.Errorf("%s auth = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestProviderHeaderTimeout(t *testing.T) {
+	cfg, _ := mustParse(t, `
+server: {header_timeout: 20s}
+providers:
+  slow: {type: images, base_url: "https://x/v1", key: k, header_timeout: 5m}
+  fast: {type: chat, base_url: "https://x/v1", key: k}
+routes:
+  - model: m
+    targets: [{provider: fast}, {provider: slow}]
+`)
+	if got := cfg.Providers["slow"].HeaderTimeout; got != Duration(5*time.Minute) {
+		t.Errorf("slow header_timeout = %s", got)
+	}
+	if got := cfg.Providers["fast"].HeaderTimeout; got != Duration(20*time.Second) {
+		t.Errorf("fast header_timeout = %s, want server.header_timeout", got)
 	}
 }
 
@@ -424,6 +443,8 @@ func TestValidation(t *testing.T) {
 		{"header value DEL", provider(chat + "    headers:\n      x-a: \"a\\x7fb\"\n"), "providers.p.headers.x-a: value contains a control character"},
 		{"key control", provider("    type: chat\n    base_url: https://x/v1\n    key: \"k\\r\"\n"), "providers.p.key: contains a control character"},
 		{"api_key control", minimal + "server:\n  api_key: \"s\\x1b\"\n", "server.api_key: contains a control character"},
+		{"negative header_timeout", provider(chat + "    header_timeout: -1s\n"), "providers.p.header_timeout: must be greater than 0"},
+		{"images overrides", provider("    type: images\n    base_url: https://x/v1\n    key: k\n    overrides:\n      - delete: quality\n"), "providers.p.overrides: not supported on an images provider"},
 		// overrides
 		{"override neither", provider(chat + "    overrides:\n      - {}\n"), "providers.p.overrides[0]: must have exactly one of delete or set"},
 		{"override both", provider(chat + "    overrides:\n      - {delete: a, set: {path: b, value: 1}}\n"), "providers.p.overrides[0]: must have exactly one"},

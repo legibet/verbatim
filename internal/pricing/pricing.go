@@ -23,14 +23,18 @@ import (
 type Price struct {
 	Source     string   // provider id of the file the cost came from, or "overrides"
 	Input      float64  // uncached input
-	Output     float64  // output, reasoning included
+	Output     *float64 // output, reasoning included; nil: the model has no text output
 	CacheRead  *float64 // nil: unknown; a cost with cache reads is not estimated
 	CacheWrite *float64 // nil: priced at Input
 	Reasoning  *float64 // informational only; reasoning tokens are priced as Output
 	// CacheWrite1hMultiple is the provider's billing.cacheWrite1h: 1-hour cache
 	// writes cost Input times this. nil: priced like other cache writes.
 	CacheWrite1hMultiple *float64
-	Tiers                []Tier // ascending by Size
+	// ImageInput and ImageOutput price the image tokens of an image model,
+	// which are part of its input and output tokens. Only the overrides file
+	// sets them: the provider files have no image prices.
+	ImageInput, ImageOutput *float64
+	Tiers                   []Tier // ascending by Size
 }
 
 // Tier is a context-size price tier. It applies when the request's context
@@ -59,13 +63,15 @@ type providerFile struct {
 }
 
 type costJSON struct {
-	Input      *float64 `json:"input"`
-	Output     *float64 `json:"output"`
-	CacheRead  *float64 `json:"cache_read"`
-	CacheWrite *float64 `json:"cache_write"`
-	Reasoning  *float64 `json:"reasoning"`
-	Currency   string   `json:"currency"`
-	Tiers      []struct {
+	Input       *float64 `json:"input"`
+	Output      *float64 `json:"output"`
+	CacheRead   *float64 `json:"cache_read"`
+	CacheWrite  *float64 `json:"cache_write"`
+	Reasoning   *float64 `json:"reasoning"`
+	ImageInput  *float64 `json:"image_input"`
+	ImageOutput *float64 `json:"image_output"`
+	Currency    string   `json:"currency"`
+	Tiers       []struct {
 		Input      *float64 `json:"input"`
 		Output     *float64 `json:"output"`
 		CacheRead  *float64 `json:"cache_read"`
@@ -196,17 +202,19 @@ func newPrice(id, source string, c costJSON, multiple *float64) (Price, string) 
 	if c.Currency != "" && c.Currency != "USD" {
 		return Price{}, fmt.Sprintf("model %q in %s is priced in %s, not USD; skipped", id, source, c.Currency)
 	}
-	if c.Input == nil || c.Output == nil {
+	if c.Input == nil || c.Output == nil && c.ImageOutput == nil {
 		return Price{}, fmt.Sprintf("model %q in %s has no input or output price; skipped", id, source)
 	}
 	p := Price{
 		Source:               source,
 		Input:                *c.Input,
-		Output:               *c.Output,
+		Output:               c.Output,
 		CacheRead:            c.CacheRead,
 		CacheWrite:           c.CacheWrite,
 		Reasoning:            c.Reasoning,
 		CacheWrite1hMultiple: multiple,
+		ImageInput:           c.ImageInput,
+		ImageOutput:          c.ImageOutput,
 	}
 	for _, t := range c.Tiers {
 		if t.Tier.Type != "context" {
@@ -252,14 +260,18 @@ type unitPrices struct {
 	CacheRead    *float64 `json:"cache_read"` // null when the model has no cache read price
 	CacheWrite   float64  `json:"cache_write"`
 	CacheWrite1h float64  `json:"cache_write_1h"`
-	Output       float64  `json:"output"`
+	Output       *float64 `json:"output"`                 // null when the model has no text output
+	ImageInput   *float64 `json:"image_input,omitempty"`  // image models only
+	ImageOutput  *float64 `json:"image_output,omitempty"` // image models only
 }
 
-// Cost computes the USD cost of a response (design 12.3). ok is false when
-// the usage is incomplete (input or output tokens missing) or when it has
-// cache reads and the model has no cache read price: nothing is estimated.
-// priceJSON records the per-1M-token unit prices used for each token column
-// (input, cache_read, cache_write, cache_write_1h, output).
+// Cost computes the USD cost of a response (design 12.3). Image tokens are
+// priced at the image prices, the rest of input and output at the text
+// prices. ok is false when the usage is incomplete (input or output tokens
+// missing, or an image model's image tokens not reported) or has tokens the
+// model has no price for, such as cache reads without a cache read price or
+// image tokens without an image price: nothing is estimated. priceJSON
+// records the per-1M-token unit prices used.
 func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 	if u.Input == nil || u.Output == nil {
 		return 0, nil, false
@@ -269,6 +281,12 @@ func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 			return 0
 		}
 		return float64(*v)
+	}
+	price := func(v *float64) float64 {
+		if v == nil {
+			return 0
+		}
+		return *v
 	}
 
 	input, output, cacheRead, cacheWrite := p.Input, p.Output, p.CacheRead, p.CacheWrite
@@ -286,7 +304,7 @@ func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 			input = *tier.Input
 		}
 		if tier.Output != nil {
-			output = *tier.Output
+			output = tier.Output
 		}
 		if tier.CacheRead != nil {
 			cacheRead = tier.CacheRead
@@ -294,6 +312,26 @@ func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 		if tier.CacheWrite != nil {
 			cacheWrite = tier.CacheWrite
 		}
+	}
+
+	// Image tokens are part of input and output. An image model, one with an
+	// image price, needs them reported, except that one without a text
+	// output price outputs only images.
+	textIn, textOut := n(u.Input), n(u.Output)
+	imageIn, imageOut := n(u.InputImage), n(u.OutputImage)
+	if p.ImageInput != nil || p.ImageOutput != nil {
+		if u.InputImage == nil || u.OutputImage == nil && output != nil {
+			return 0, nil, false
+		}
+		if u.OutputImage == nil {
+			imageOut = textOut
+		}
+	}
+	textIn -= imageIn
+	textOut -= imageOut
+	if textIn < 0 || textOut < 0 || textOut > 0 && output == nil ||
+		imageIn > 0 && p.ImageInput == nil || imageOut > 0 && p.ImageOutput == nil {
+		return 0, nil, false
 	}
 
 	// Without a cache read price only usage with no cache reads is priced.
@@ -304,7 +342,8 @@ func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 	case n(u.CacheRead) > 0:
 		return 0, nil, false
 	}
-	up := unitPrices{Source: p.Source, TierSize: tierSize, Input: input, Output: output, CacheRead: cacheRead, CacheWrite: input}
+	up := unitPrices{Source: p.Source, TierSize: tierSize, Input: input, Output: output, CacheRead: cacheRead, CacheWrite: input,
+		ImageInput: p.ImageInput, ImageOutput: p.ImageOutput}
 	if cacheWrite != nil {
 		up.CacheWrite = *cacheWrite
 	}
@@ -314,11 +353,13 @@ func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 	}
 
 	write1h := n(u.CacheWrite1h)
-	usd = (n(u.Input)*up.Input +
+	usd = (textIn*up.Input +
+		imageIn*price(up.ImageInput) +
 		n(u.CacheRead)*readPrice +
 		(n(u.CacheWrite)-write1h)*up.CacheWrite +
 		write1h*up.CacheWrite1h +
-		n(u.Output)*up.Output) / 1e6
+		textOut*price(up.Output) +
+		imageOut*price(up.ImageOutput)) / 1e6
 	priceJSON, _ = json.Marshal(up)
 	return usd, priceJSON, true
 }

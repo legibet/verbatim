@@ -3,8 +3,14 @@ package protocol
 import "github.com/tidwall/gjson"
 
 // maxBodyBytes bounds a non-streamed response body kept for usage parsing;
-// a larger body yields no usage.
+// a larger body yields no usage. Long strings are dropped before the bound
+// applies (stringElider), so only a body with very many fields reaches it.
 const maxBodyBytes = 8 << 20
+
+// maxStringBytes is the longest JSON string content the usage parsers keep.
+// Ids, types and model names are far shorter; what is longer (base64 images,
+// generated text) is never needed to read usage.
+const maxStringBytes = 4 << 10
 
 // usageState is what a protocol extracts from the objects of a response body.
 type usageState struct {
@@ -36,14 +42,62 @@ func newUsageParser(stream bool, observe observeFunc) UsageParser {
 	return &bodyParser{observe: observe}
 }
 
+// stringElider drops the content of JSON strings longer than maxStringBytes
+// as bytes pass through, leaving "" in their place, so that a response
+// carrying images parses in bounded memory. A raw newline cannot occur in a
+// JSON string, so a newline ends a string: this keeps the filter correct on
+// the lines of a server-sent event stream, around the JSON in data fields.
+type stringElider struct {
+	in      bool   // inside a string
+	escaped bool   // the previous byte was an unescaped backslash
+	long    bool   // the current string exceeded maxStringBytes
+	content []byte // the current string's content, while short enough
+}
+
+// filter appends the filtered form of src to dst.
+func (e *stringElider) filter(dst, src []byte) []byte {
+	for _, c := range src {
+		if !e.in {
+			dst = append(dst, c)
+			if c == '"' {
+				e.in, e.escaped, e.long, e.content = true, false, false, e.content[:0]
+			}
+			continue
+		}
+		if c == '\n' || c == '"' && !e.escaped {
+			if !e.long {
+				dst = append(dst, e.content...)
+			}
+			dst = append(dst, c)
+			e.in = false
+			continue
+		}
+		e.escaped = c == '\\' && !e.escaped
+		if e.long {
+			continue
+		}
+		if len(e.content) == maxStringBytes {
+			e.long, e.content = true, e.content[:0]
+			continue
+		}
+		e.content = append(e.content, c)
+	}
+	return dst
+}
+
 // streamParser parses each server-sent event as it completes.
 type streamParser struct {
+	elider  stringElider
+	buf     []byte // the filtered form of the latest write
 	sse     sseSplitter
 	observe observeFunc
 	st      usageState
 }
 
-func (p *streamParser) Write(b []byte) { p.sse.write(b, p.event) }
+func (p *streamParser) Write(b []byte) {
+	p.buf = p.elider.filter(p.buf[:0], b)
+	p.sse.write(p.buf, p.event)
+}
 
 func (p *streamParser) event(name string, data []byte) {
 	if gjson.ValidBytes(data) {
@@ -57,6 +111,7 @@ func (p *streamParser) ErrorEvent() bool     { return p.st.errorEvent }
 
 // bodyParser accumulates a whole response body and parses it when asked.
 type bodyParser struct {
+	elider   stringElider
 	buf      []byte
 	overflow bool
 	observe  observeFunc
@@ -68,11 +123,9 @@ func (p *bodyParser) Write(b []byte) {
 		return
 	}
 	p.st = nil
-	if len(p.buf)+len(b) > maxBodyBytes {
+	if p.buf = p.elider.filter(p.buf, b); len(p.buf) > maxBodyBytes {
 		p.overflow, p.buf = true, nil
-		return
 	}
-	p.buf = append(p.buf, b...)
 }
 
 func (p *bodyParser) state() *usageState {

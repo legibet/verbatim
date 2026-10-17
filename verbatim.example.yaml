@@ -34,16 +34,17 @@ server:
 # a key. base_url is the base URL that protocol's official SDK takes, as the
 # provider documents it (what you would put in OPENAI_BASE_URL or
 # ANTHROPIC_BASE_URL). verbatim appends only the operation suffix:
-#   chat, responses: /chat/completions, /responses, /models
+#   chat, responses: /chat/completions, /responses, /alpha/search, /models
 #                    (the OpenAI SDK base URL already ends in /v1)
+#   images:          /images/generations, /images/edits, /models
 #   anthropic:       /v1/messages, /v1/messages/count_tokens, /v1/models
 # ---------------------------------------------------------------------------
 providers:
   openai-responses:
-    type: responses                 # chat | responses | anthropic | gemini (gemini: not served yet)
+    type: responses                 # chat | responses | anthropic | images | gemini (gemini: not served yet)
     base_url: https://api.openai.com/v1
     key: ${OPENAI_KEY}
-    # auth: bearer                  # default by type: chat/responses bearer,
+    # auth: bearer                  # default by type: chat/responses/images bearer,
                                     # anthropic x-api-key, gemini x-goog-api-key.
                                     # "none" for a local server without a key.
   openai-chat:
@@ -95,6 +96,13 @@ providers:
     base_url: http://127.0.0.1:8081/v1
     auth: none
 
+  openai-images:                    # OpenAI Images API: /v1/images/generations and
+    type: images                    # /v1/images/edits, JSON or multipart (only the
+    base_url: https://api.openai.com/v1   # model field is ever rewritten). No overrides.
+    key: ${OPENAI_KEY}
+    header_timeout: 5m              # any provider; default server.header_timeout. A
+                                    # non-streamed image is answered once it is drawn.
+
 # ---------------------------------------------------------------------------
 # routes: ordered. A request takes the first route whose `model` matches the
 # client's model name AND which has a target whose provider speaks the
@@ -128,6 +136,7 @@ routes:
     targets:
       - provider: openai-responses
       - provider: openai-chat
+      - provider: openai-images                 # image requests for gpt-image-*
 
   # Catch-all. discover: false keeps these providers' model lists out of
   # GET /v1/models (pattern routes discover from their providers by default;
@@ -192,10 +201,14 @@ log:
 # ---------------------------------------------------------------------------
 # pricing: list prices used to put a cost on the log. Optional.
 #
-# `verbatim pricing sync` downloads each source (llm-metadata / models.dev
-# provider files) into `cache`. A model is priced by the client's model name,
-# exact match only; `aliases` map a name you expose to a priced name.
-# `overrides` is a local file in the same shape for prices you maintain.
+# `verbatim pricing sync` downloads llm-metadata / models.dev provider files
+# into `cache`; a later source wins for a model both price. A model is priced
+# by the client's model name, exact match only; `aliases` map a name you
+# expose to a priced name. `overrides` is a local file in the same shape for
+# prices you maintain. The provider files have no image token prices, so an
+# image model is priced there, with "image_input" and "image_output":
+#   {"models": {"gpt-image-2": {"cost": {"input": 5, "cache_read": 1.25,
+#                                        "image_input": 8, "image_output": 30}}}}
 # ---------------------------------------------------------------------------
 pricing:
   sources:

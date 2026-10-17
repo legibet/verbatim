@@ -128,7 +128,17 @@ func pricingShow(args []string) int {
 	line("source", price.Source)
 	fmt.Println("USD per 1M tokens:")
 	line("input", usd(price.Input))
-	line("output", usd(price.Output))
+	if price.Output != nil {
+		line("output", usd(*price.Output))
+	} else {
+		line("output", "none")
+	}
+	if price.ImageInput != nil {
+		line("image input", usd(*price.ImageInput))
+	}
+	if price.ImageOutput != nil {
+		line("image output", usd(*price.ImageOutput))
+	}
 	if price.CacheRead != nil {
 		line("cache read", usd(*price.CacheRead))
 	} else {

@@ -6,6 +6,7 @@ import (
 	"compress/zlib"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -31,6 +32,19 @@ type usageTee struct {
 	in   chan []byte   // write → decoder: compressed chunks
 	out  chan []byte   // decoder → write: decompressed data, nil when the chunk is used up
 	done chan struct{} // closed when the decoder has exited
+}
+
+// eventStream reports whether a committed body is a server-sent event
+// stream: by its Content-Type, or by whether the client asked for a stream
+// when the provider sent no Content-Type. An upstream may answer a stream
+// request with one JSON body, as some image relays do.
+func eventStream(header http.Header, requested bool) bool {
+	ct := header.Get("Content-Type")
+	if ct == "" {
+		return requested
+	}
+	mt, _, _ := mime.ParseMediaType(ct)
+	return mt == "text/event-stream"
 }
 
 // decoder returns how to decompress a body with the response's

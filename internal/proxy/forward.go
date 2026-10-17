@@ -181,13 +181,14 @@ func (x *exchange) run() {
 		x.cancelled(fmt.Sprintf("read request body: %v", err))
 		return
 	}
-	model, err := x.proto.ModelFromBody(body)
+	contentType := x.r.Header.Get("Content-Type")
+	model, err := x.proto.ModelFromBody(body, contentType)
 	if err != nil {
 		x.fail(http.StatusBadRequest, "no_model", err.Error())
 		return
 	}
 	x.row.ClientModel = model
-	x.row.Stream = x.proto.Stream(body)
+	x.row.Stream = x.proto.Stream(body, contentType)
 
 	routeName, cands, ok := h.routes.Match(x.proto.ID(), model)
 	if !ok {
@@ -252,7 +253,7 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 		return order, true
 	}
 	x.pin.key = affinity.PinKey{Protocol: x.proto.ID(), Key: key, Model: model}
-	if x.op != protocol.Create {
+	if x.op.Auxiliary() {
 		// count_tokens and search follow a pin but never create one (design 7.3).
 		x.pin.target, x.pin.has = h.pins.Get(x.pin.key)
 	} else {
@@ -323,7 +324,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		x.setTarget(c.TargetID)
 		sent := time.Now()
 		a := attemptJSON{Provider: c.Provider, UpstreamModel: c.Model}
-		resp, err := h.transport.RoundTrip(req)
+		resp, err := h.transports[c.Provider].RoundTrip(req)
 		if err != nil {
 			a.MS = time.Since(sent).Milliseconds()
 			if x.r.Context().Err() != nil {
@@ -348,10 +349,10 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		if !failover(resp.StatusCode) {
 			a.MS = time.Since(sent).Milliseconds()
 			x.attempts = append(x.attempts, a)
-			if x.op == protocol.Create {
-				h.breakers.Success(c.Provider)
-			} else {
+			if x.op.Auxiliary() {
 				x.verdict(c.Provider, probe, false)
+			} else {
+				h.breakers.Success(c.Provider)
 			}
 			x.commitPin(c.TargetID)
 			x.commit(resp, c)
@@ -408,11 +409,11 @@ func counted(status int) bool {
 }
 
 // verdict reports a failed or verdict-less attempt to the breaker.
-// Only create feeds it: a healthy provider may well lack count_tokens or
-// search. A probe that ends without a counted failure is abandoned so the
-// next request can probe.
+// Auxiliary operations never feed it: a healthy provider may well lack
+// count_tokens or search. A probe that ends without a counted failure is
+// abandoned so the next request can probe.
 func (x *exchange) verdict(provider string, probe, failure bool) {
-	if failure && x.op == protocol.Create {
+	if failure && !x.op.Auxiliary() {
 		x.h.breakers.Failure(provider, probe)
 	} else if probe {
 		x.h.breakers.Abandon(provider)
@@ -428,7 +429,7 @@ func (x *exchange) setTarget(t route.TargetID) {
 // pin there if it pointed elsewhere; a pin that has served a committed
 // response is never released (design 7.2, 7.3).
 func (x *exchange) commitPin(t route.TargetID) {
-	if x.op != protocol.Create || !x.pin.has {
+	if x.op.Auxiliary() || !x.pin.has {
 		return
 	}
 	x.h.pins.Commit(x.pin.key, t)
@@ -450,7 +451,7 @@ func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) 
 	p := x.h.cfg.Providers[c.Provider]
 	var err error
 	if c.Model != x.row.ClientModel {
-		if body, err = x.proto.SetModel(body, c.Model); err != nil {
+		if body, err = x.proto.SetModel(body, x.r.Header.Get("Content-Type"), c.Model); err != nil {
 			return nil, err
 		}
 	}
@@ -611,7 +612,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 	h := x.h
 	x.writeHead(resp.StatusCode, resp.Header, resp.Trailer)
 	ok2xx := resp.StatusCode/100 == 2
-	tee := newUsageTee(x.proto.NewUsageParser(x.op, x.row.Stream), resp.Header)
+	tee := newUsageTee(x.proto.NewUsageParser(x.op, eventStream(resp.Header, x.row.Stream)), resp.Header)
 	// A Responses client may send its next turn the moment it has read this
 	// one, so the owner is recorded before the bytes revealing the id reach it.
 	needOwner := ok2xx && x.proto.ID() == protocol.Responses && x.op == protocol.Create
@@ -690,7 +691,8 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 	x.setUsage(tee, c)
 }
 
-// setUsage fills the token columns and, for create, the cost (design 11.3, 12).
+// setUsage fills the token columns and, unless the operation is auxiliary,
+// the cost (design 11.3, 12).
 func (x *exchange) setUsage(tee *usageTee, c route.Candidate) {
 	u, ok := tee.usage()
 	if !ok {
@@ -698,19 +700,26 @@ func (x *exchange) setUsage(tee *usageTee, c route.Candidate) {
 	}
 	x.row.InputTokens, x.row.CacheReadTokens, x.row.CacheWriteTokens = u.Input, u.CacheRead, u.CacheWrite
 	x.row.CacheWrite1hTokens, x.row.OutputTokens, x.row.ReasoningTokens = u.CacheWrite1h, u.Output, u.Reasoning
+	x.row.InputImageTokens, x.row.OutputImageTokens = u.InputImage, u.OutputImage
 	if u.Raw != nil {
 		x.row.UsageJSON = new(string(u.Raw))
 	}
 	t := x.h.pricing.Load()
-	if x.op != protocol.Create || t == nil {
+	if x.op.Auxiliary() || t == nil {
 		return
 	}
 	key, price, ok := t.Lookup(x.row.ClientModel, c.Model)
 	if !ok {
 		return
 	}
+	x.row.PriceKey = &key
+	// An image request's token counts mix text and image tokens, so only an
+	// entry with image prices prices it.
+	if x.proto.ID() == protocol.Images && price.ImageInput == nil && price.ImageOutput == nil {
+		return
+	}
 	if usd, priceJSON, ok := pricing.Cost(u, price); ok {
-		x.row.CostUSD, x.row.PriceKey, x.row.PriceJSON = &usd, &key, new(string(priceJSON))
+		x.row.CostUSD, x.row.PriceJSON = &usd, new(string(priceJSON))
 	}
 }
 

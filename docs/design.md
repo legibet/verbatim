@@ -44,10 +44,14 @@ verbatim identifies the inbound protocol from the request path. It does not insp
 | `anthropic` | `count_tokens` | `POST /v1/messages/count_tokens` | body `model` |
 | `gemini` | `create` | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent` | URL path |
 | `gemini` | `count_tokens` | `POST /v1beta/models/{model}:countTokens` | URL path |
+| `images` | `generate` | `POST /v1/images/generations` | body `model` |
+| `images` | `edit` | `POST /v1/images/edits` | body `model`, JSON or a multipart form field |
 
 `search` is Codex's standalone web search. Models that Codex runs without hosted tools search through a client-side `web.run` function, and Codex posts each call to `{base_url}/alpha/search` when the provider sets `supports_standalone_web_search`. It is a plain JSON request and response; the body carries the turn's `model` and the Codex session id as `id`, and the response reports no usage.
 
-The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the provider's `base_url`. Only `create` is priced, creates or moves pins, and feeds the breaker; `count_tokens` and `search` follow a pin, never feed the breaker, and are left out of usage aggregates. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
+`images` is the OpenAI Images API. It is a protocol of its own, like `chat` and `responses`, because whether an upstream serves it is a fact about that upstream, independent of whether it serves chat or Responses at the same base URL. An image model is routed like any other model, by the body `model`; Codex's image tool, for example, sends `gpt-image-2` to `{base_url}/images/generations` and `/images/edits` as JSON. Edits from the OpenAI SDK are `multipart/form-data`, with the model in a form field. Both endpoints are synchronous: the image comes back in the response (as `b64_json`, often megabytes), or as server-sent events (`image_generation.partial_image`, `image_generation.completed`, and the `image_edit.*` equivalents) when the client sets `stream`. The response reports token usage, which section 12.3 prices.
+
+The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the provider's `base_url`. `count_tokens` and `search` are auxiliary operations: they serve the create requests of a session, follow a pin but never create or move one, never feed the breaker, and are neither priced nor aggregated as usage. Every other operation (`create`, `generate`, `edit`) is priced, creates and moves pins, and feeds the breaker. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
 
 ### 4.1 Client authentication
 
@@ -58,14 +62,16 @@ If `server.api_key` is set, a request must present it in one of `Authorization: 
 For a forwarded request, verbatim:
 
 1. Reads the full client body into memory. The body is needed for retries, for the model rewrite, and for the affinity key. Requests above `server.max_body_bytes` (default 32 MiB) are rejected with 413. `server.max_inflight` (default 64) bounds the number of concurrent requests and therefore total buffered memory; excess requests get 503 in native format.
-2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For `gemini` the model is in the URL and the body step is skipped. Deserializing the body into a struct is never done, so unknown fields survive.
-3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat` and `responses` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
+2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For `gemini` the model is in the URL and the body step is skipped. For a `multipart/form-data` body (`images` edits) the bytes of the `model` field's value are replaced and no other byte changes; the form is never re-encoded, so file parts, field order, and part headers reach the provider as sent. Deserializing the body into a struct is never done, so unknown fields survive.
+3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat`, `responses`, and `images` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, `/images/generations`, `/images/edits`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
 4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`, `x-goog-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's authentication header per its `auth` setting; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
 5. Sends the request and streams the response back.
 
 ### 4.3 Response forwarding
 
 Response status, headers (except hop-by-hop), trailers, and body are copied to the client unchanged. The transport is configured not to request or transparently decompress content encodings, so what the provider sends is what the client gets. Server-sent events are copied as they arrive, with a flush after every write. verbatim observes the response body through a bounded tee that extracts usage and the response id for the log (section 11.3); the tee never modifies what the client receives, and a parse failure in the tee never affects forwarding. When the upstream response carries `Content-Encoding` `gzip`, `deflate`, `br`, or `zstd`, the tee decompresses its own copy; the client still receives the compressed bytes. All four matter in practice: clients advertise them (Node's fetch sends `gzip, deflate, br, zstd`) and providers use them for streams (DeepSeek answers that header with `zstd`), and the tee is also where the response id that Responses ownership needs is read. Other encodings, and stacked encodings, are not inspected and yield null usage.
+
+The tee reads the body as server-sent events when the response `Content-Type` is `text/event-stream`, as one JSON document otherwise, and by the request's `stream` flag when the response has no `Content-Type`; an upstream may answer a stream request with one JSON body, as magpie does for images. In its own copy the tee replaces the content of every JSON string longer than 4 KiB with nothing, so a body or an event carrying an image is parsed in bounded memory; usage, ids, and event types are short. A non-streamed body is parsed when it ends, and one that still exceeds 8 MiB yields null usage; a single event above 1 MiB is skipped.
 
 The point of no return is when verbatim commits the upstream status and headers to the client. After that, nothing is retried: a cut stream is forwarded as a cut stream and the client connection is aborted rather than closed cleanly, so the client's SDK sees an error instead of a truncated success. An error event inside a `200` stream is forwarded as is.
 
@@ -161,6 +167,11 @@ providers:
     type: chat
     base_url: http://127.0.0.1:8081/v1
     auth: none
+  openai-images:
+    type: images
+    base_url: https://api.openai.com/v1
+    key: ${OPENAI_KEY}
+    header_timeout: 5m               # a non-streamed image is answered once it is drawn
 
 routes:
   - model: kimi-k3
@@ -178,6 +189,7 @@ routes:
     targets:
       - provider: openai-responses
       - provider: openai-chat
+      - provider: openai-images       # serves gpt-image-* on /v1/images/*
   - model: "*"
     discover: false
     targets:
@@ -227,12 +239,13 @@ A provider is one upstream endpoint speaking exactly one protocol. A relay that 
 
 | Field | Required | Meaning |
 |---|---|---|
-| `type` | yes | `chat`, `responses`, `anthropic`, or `gemini` |
+| `type` | yes | `chat`, `responses`, `anthropic`, `gemini`, or `images` |
 | `base_url` | yes | The base URL the protocol's official SDK takes; the operation's fixed suffix is appended (section 4.2) |
 | `key` | unless `auth: none` | Provider API key |
-| `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, `x-goog-api-key`, or `none`. Default by type: `chat` and `responses` use `bearer`, `anthropic` uses `x-api-key`, `gemini` uses `x-goog-api-key`. |
+| `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, `x-goog-api-key`, or `none`. Default by type: `chat`, `responses`, and `images` use `bearer`, `anthropic` uses `x-api-key`, `gemini` uses `x-goog-api-key`. |
 | `headers` | no | Map of header name to string (set) or `null` (remove), applied after client headers are copied and before `auth` |
-| `overrides` | no | Ordered list of static request edits, section 9 |
+| `overrides` | no | Ordered list of static request edits, section 9; not allowed on `images` providers |
+| `header_timeout` | no | Wait for this provider's response headers; default `server.header_timeout`. Providers with the same value share one connection pool. |
 
 ### 6.3 `routes`
 
@@ -340,7 +353,7 @@ This is state, and it is the one place verbatim keeps state beyond a cache. It i
 
 Before anything is committed to the client, the following end the current attempt and move to the next candidate:
 
-- No response headers: connection, TLS, or DNS failure; `server.header_timeout` elapsed.
+- No response headers: connection, TLS, or DNS failure; the provider's `header_timeout` elapsed.
 - Upstream status 408, 409, 425, 429, 500, 502, 503, 504, 529.
 - Upstream status 401 or 403: the provider key is invalid, exhausted, or not entitled to this model. Logged at warning level because it needs an operator.
 - Upstream status 404: the provider does not serve this model or operation. Logged at warning level.
@@ -386,6 +399,7 @@ The validator rejects:
 - `model` and `stream` at any depth of a `set` or `delete`, because they drive routing and the usage parser.
 - Any path under `system`, `tools`, or `messages` on providers of type `anthropic`, because editing them would change the preserved-thinking prefix. Overrides elsewhere in the body are static and therefore identical on every turn.
 - Two operations whose paths overlap (one is a prefix of the other), to keep the result independent of ordering mistakes.
+- Any override on a provider of type `images`: an image request may be a multipart form, which these JSON edits cannot address, and an override that applies to some requests of a provider and not others would be hidden behavior.
 
 Overrides exist for relay quirks (a relay that rejects an unknown field, or demands a fixed parameter). They are not a conversion mechanism. Note that an override cannot be conditional on the request, so an edit that is only valid for streaming requests (such as `stream_options`) cannot be expressed; that is deliberate.
 
@@ -415,8 +429,8 @@ One SQLite database (`log.path`), WAL mode, tables `requests` and `owned_respons
 | `ts` | integer | request start, unix milliseconds |
 | `request_id` | text | verbatim-generated, also returned as `x-verbatim-request-id` |
 | `upstream_request_id` | text | `x-request-id` or `request-id` from the committed upstream response |
-| `protocol` | text | `chat`, `responses`, `anthropic`, `gemini` |
-| `operation` | text | `create`, `count_tokens`, or `search` |
+| `protocol` | text | `chat`, `responses`, `anthropic`, `gemini`, `images` |
+| `operation` | text | `create`, `count_tokens`, `search`, `generate`, or `edit` |
 | `client_model` | text | model name as the client sent it |
 | `route` | text | matched route pattern |
 | `provider` | text | provider of the committed response, or of the last attempt |
@@ -437,9 +451,11 @@ One SQLite database (`log.path`), WAL mode, tables `requests` and `owned_respons
 | `cache_write_1h_tokens` | integer | the subset written with a 1-hour TTL (Anthropic only) |
 | `output_tokens` | integer | includes reasoning tokens |
 | `reasoning_tokens` | integer | subset of output, when reported |
+| `input_image_tokens` | integer | image tokens within `input_tokens` (`images` only) |
+| `output_image_tokens` | integer | image tokens within `output_tokens` (`images` only) |
 | `usage_json` | text | the provider's usage object as received, unmodified |
 | `cost_usd` | real | computed at write time; null when no price or when usage is incomplete |
-| `price_key` | text | the price-table entry used |
+| `price_key` | text | the price-table entry found; set also when the usage has tokens that entry does not price (`cost_usd` null) |
 | `price_json` | text | the unit prices used, so history stays stable when the price table changes |
 | `error` | text | up to `log.error_excerpt_bytes` of the final error body, or verbatim's own message |
 
@@ -455,6 +471,7 @@ The tee observes the committed response body and keeps the last usage object see
 | `responses` | `usage` | `response.completed`, `response.incomplete`, or `response.failed`, whichever terminal event arrives, `response.usage` | `input_tokens`, `output_tokens`, `input_tokens_details.cached_tokens`, `input_tokens_details.cache_write_tokens`, `output_tokens_details.reasoning_tokens` |
 | `anthropic` | `usage` | `message_start` (`message.usage`) merged with `message_delta` (`usage`); delta values are cumulative, so later values replace earlier ones | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation.ephemeral_5m_input_tokens`, `cache_creation.ephemeral_1h_input_tokens` |
 | `gemini` | `usageMetadata` | last chunk's `usageMetadata` | `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount` |
+| `images` | `usage` | `image_generation.completed` or `image_edit.completed`, `usage` | `input_tokens`, `output_tokens`, `input_tokens_details.image_tokens`, `output_tokens_details.image_tokens` |
 | `count_tokens` | top-level `input_tokens` (Anthropic), `totalTokens` (Gemini) | n/a | |
 
 Normalization into the row:
@@ -462,19 +479,24 @@ Normalization into the row:
 - `anthropic`: `input_tokens` is already uncached. `cache_write_tokens` = `cache_creation_input_tokens`; `cache_write_1h_tokens` = `cache_creation.ephemeral_1h_input_tokens` when present, else null.
 - `chat`, `responses`: the reported prompt count includes cached and cache-written tokens. `input_tokens` = prompt count minus `cached_tokens` minus `cache_write_tokens`, each treated as 0 only when the provider reports the details object at all; if the details object is absent, `input_tokens` holds the full prompt count and the cache columns are null. OpenAI reports `cache_write_tokens` for GPT-5.6 and later; its cache lifetime is 30 minutes and has no 1-hour variant, so `cache_write_1h_tokens` is null.
 - `gemini`: `input_tokens` = `promptTokenCount` minus `cachedContentTokenCount`; no cache writes are reported.
+- `images`: `input_tokens` and `output_tokens` as reported (the Images API reports no cache tokens); `input_image_tokens` and `output_image_tokens` from the details objects. Some relays (magpie) report only the totals. A generations request takes only a text prompt, so its `input_image_tokens` is 0 when the details are missing; for an edit it stays null. With `n` above 1 in a stream, the last completed event's usage is kept, as for every other protocol; whether that event reports the whole request or one image is not documented and has not been observed, because the relays tested return one image.
 - `reasoning_tokens` is recorded as reported and is part of `output_tokens`.
 
 Missing fields are null, never zero. Nothing is estimated. The raw object is always kept in `usage_json`.
 
 ## 12. Pricing
 
-Pricing exists only to put a cost figure on the usage log. It represents configured list prices per token; it cannot know what a relay actually charges, nor price hosted tools, images, or service tiers. The UI labels it as such and shows, for every aggregate, how many requests had no price.
+Pricing exists only to put a cost figure on the usage log. It represents configured list prices per token, image tokens included; it cannot know what a relay actually charges, nor price hosted tools, images billed per picture, or service tiers. The UI labels it as such and shows, for every aggregate, how many requests had no price.
 
 ### 12.1 Source
 
 `verbatim pricing sync` downloads each URL in `pricing.sources` into `pricing.cache`, named by the last element of the URL path (`anthropic.json`); two sources with the same file name are a configuration error. The expected shape is the llm-metadata / models.dev provider file: `models.<id>.cost` with `input`, `output`, `cache_read`, `cache_write`, optionally `reasoning`, `tiers`, and `currency`; and provider-level `billing.cacheWrite1h` giving the 1-hour cache write price as a multiple of `input`. A model with no `cost.currency` is USD. Models whose currency is not USD are skipped with a warning. When two sources define the same model id, the later source in the list wins and `check` warns.
 
-`pricing.overrides` is a local JSON file in the same shape (`{"models": {"<name>": {"cost": {...}}}}`). It is merged over the synced data at load time; an override replaces the whole `cost` object of that model.
+`pricing.overrides` is a local JSON file in the same shape (`{"models": {"<name>": {"cost": {...}}}}`). It is merged over the synced data at load time; an override replaces the whole `cost` object of that model. A cost there may also have `image_input` and `image_output`, the image token prices of an image model, and may then omit `output` when the model has no text output. The provider files carry no image prices, so image models are priced through overrides, from the provider's price page:
+
+```json
+{"models": {"gpt-image-2": {"cost": {"input": 5, "cache_read": 1.25, "image_input": 8, "image_output": 30}}}}
+```
 
 The running server reloads the price table when any file under `pricing.cache` or the overrides file changes, checked at most once a minute.
 
@@ -499,7 +521,18 @@ cost = input_tokens                                 * cost.input
      + output_tokens                                * cost.output
 ```
 
-all divided by 1,000,000, with null token columns contributing nothing and `cache_write_1h_tokens` treated as 0 when null. If `cost.cache_write` is absent, cache writes are priced at `cost.input`; if `billing.cacheWrite1h` is absent, 1-hour writes are priced at `cost.cache_write`. Reasoning tokens are priced as output. When `cost.tiers` is present, the tier is chosen by `input_tokens + cache_read_tokens + cache_write_tokens` against each tier's context bound, and a price missing from a tier inherits the base `cost`. `price_key` and `price_json` record what was used.
+all divided by 1,000,000, with null token columns contributing nothing and `cache_write_1h_tokens` treated as 0 when null. If `cost.cache_write` is absent, cache writes are priced at `cost.input`; if `billing.cacheWrite1h` is absent, 1-hour writes are priced at `cost.cache_write`. Reasoning tokens are priced as output. When `cost.tiers` is present, the tier is chosen by `input_tokens + cache_read_tokens + cache_write_tokens` against each tier's context bound, and a price missing from a tier inherits the base `cost`. `price_key` and `price_json` record what was used. A model without a text output price prices only requests with no text output.
+
+Image tokens, which the images protocol reports within input and output, are priced at `cost.image_input` and `cost.image_output`, the rest at the text prices:
+
+```
+cost = (input_tokens  - input_image_tokens)  * cost.input
+     + input_image_tokens                    * cost.image_input
+     + (output_tokens - output_image_tokens) * cost.output
+     + output_image_tokens                   * cost.image_output
+```
+
+plus the cache terms above. An `images` request is priced only by an entry with an image price, since its counts mix text and image tokens. For such an entry the image tokens must be reported: a null `input_image_tokens` leaves the request unpriced, and a null `output_image_tokens` does too, unless the model has no text output price (gpt-image-2 has none), when all output is image output. A token count with no price for it leaves the request unpriced as well: image tokens for an entry without that image price, or text output for a model without a text output price. Nothing is estimated.
 
 ## 13. CLI
 
@@ -542,7 +575,7 @@ Language: Go (1.27, the current release). Dependencies, kept deliberately short:
 Forwarding is built on `net/http/httputil.ReverseProxy`, which already handles hop-by-hop headers, headers named by `Connection`, trailers, `FlushInterval: -1` streaming, and client-cancellation propagation. The parts verbatim owns:
 
 - **`Rewrite`**: protocol detection, body read and model extraction have already happened in the handler; `Rewrite` only sets the outbound URL, headers, and body for the first attempt.
-- **`Transport`**: a `http.RoundTripper` that implements the attempt loop of section 5. For each candidate it builds the attempt body and URL, sends through a shared `http.Transport`, and either returns the response (committing it) or records the failure and continues. Because the loop lives in the round tripper, `ReverseProxy` never sees a failed attempt, and only the committed response is written to the client. The shared transport has `DisableCompression: true`, `ResponseHeaderTimeout` from `server.header_timeout`, and no redirect following (round trippers do not follow redirects; a 3xx is forwarded as is). Go's transport retries a request on a dead connection only when the request is idempotent or carries an `Idempotency-Key` header; verbatim neither adds nor strips that header, so retry semantics are exactly what the client asked for.
+- **`Transport`**: a `http.RoundTripper` that implements the attempt loop of section 5. For each candidate it builds the attempt body and URL, sends through the provider's `http.Transport` (one per distinct `header_timeout`), and either returns the response (committing it) or records the failure and continues. Because the loop lives in the round tripper, `ReverseProxy` never sees a failed attempt, and only the committed response is written to the client. The shared transport has `DisableCompression: true`, `ResponseHeaderTimeout` from the provider's `header_timeout`, and no redirect following (round trippers do not follow redirects; a 3xx is forwarded as is). Go's transport retries a request on a dead connection only when the request is idempotent or carries an `Idempotency-Key` header; verbatim neither adds nor strips that header, so retry semantics are exactly what the client asked for.
 - **`ModifyResponse`**: wraps the body in the usage tee and adds `x-verbatim-request-id` and, on exhaustion, `x-verbatim-attempts`.
 - **`ErrorHandler`**: produces the native-format 502 when the round tripper returns an error (no upstream response at all).
 - **Idle timeout**: a body-inactivity timer around the upstream body, reset on every read; on expiry the upstream body is closed and the client connection aborted, recorded as outcome `truncated`.
@@ -589,7 +622,7 @@ Concurrency: one goroutine per request, standard library. The pin store, the bre
 
 In:
 
-- `chat`, `responses`, `anthropic` entry points, including `count_tokens` and Codex's `/v1/alpha/search`.
+- `chat`, `responses`, `anthropic`, `images` entry points, including `count_tokens` and Codex's `/v1/alpha/search`.
 - Providers with configurable auth and headers, routes, selection, failover, breaker, affinity with pin reservation, response ownership, overrides, as specified.
 - SQLite log with usage and cost; `serve`, `check`, `usage`, `log`, `pricing sync`, `pricing show`, `status`.
 - Model listing endpoints with provider discovery.
@@ -608,4 +641,4 @@ Out, for later:
 - Default values for `header_timeout`, `idle_timeout`, `failure_threshold`, and `cooldown` are placeholders to be tuned against real agent traffic. Long prompts with large caches can take over 60 seconds to first byte.
 - Whether 404 should be failover-eligible by default. It is useful for relays that lack a model, and wrong if a provider returns 404 for a malformed path. The current choice is eligible, with a warning log, and never counted by the breaker.
 - Whether `affinity.ttl` should default higher than one hour. A working session with a lunch break in it loses its pin at one hour.
-- The Gemini Interactions API, which Google now positions above `generateContent`, has not been examined. It may require a fifth protocol rather than an extension of `gemini`.
+- The Gemini Interactions API, which Google now positions above `generateContent`, has not been examined. It may require another protocol rather than an extension of `gemini`.

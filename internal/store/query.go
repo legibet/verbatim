@@ -37,6 +37,8 @@ type Request struct {
 	CacheWrite1hTokens *int64    `json:"cache_write_1h_tokens"`
 	OutputTokens       *int64    `json:"output_tokens"`
 	ReasoningTokens    *int64    `json:"reasoning_tokens"`
+	InputImageTokens   *int64    `json:"input_image_tokens"`  // subset of input_tokens (images)
+	OutputImageTokens  *int64    `json:"output_image_tokens"` // subset of output_tokens (images)
 	UsageJSON          *string   `json:"usage_json"`
 	CostUSD            *float64  `json:"cost_usd"`
 	PriceKey           *string   `json:"price_key"`
@@ -48,7 +50,7 @@ const requestColumns = `id, ts, request_id, upstream_request_id, protocol, opera
 	provider, upstream_model, status, outcome, stream, attempts, attempts_ms, ttfb_ms,
 	total_ms, routing_json, attempt_log, affinity_key, input_tokens, cache_read_tokens,
 	cache_write_tokens, cache_write_1h_tokens, output_tokens, reasoning_tokens,
-	usage_json, cost_usd, price_key, price_json, error`
+	input_image_tokens, output_image_tokens, usage_json, cost_usd, price_key, price_json, error`
 
 func scanRequest(row interface{ Scan(...any) error }) (*Request, error) {
 	var r Request
@@ -58,6 +60,7 @@ func scanRequest(row interface{ Scan(...any) error }) (*Request, error) {
 		&r.Provider, &r.UpstreamModel, &r.Status, &r.Outcome, &r.Stream, &r.Attempts, &r.AttemptsMS, &r.TTFBMS,
 		&r.TotalMS, &r.RoutingJSON, &r.AttemptLog, &r.AffinityKey, &r.InputTokens, &r.CacheReadTokens,
 		&r.CacheWriteTokens, &r.CacheWrite1hTokens, &r.OutputTokens, &r.ReasoningTokens,
+		&r.InputImageTokens, &r.OutputImageTokens,
 		&r.UsageJSON, &r.CostUSD, &r.PriceKey, &r.PriceJSON, &r.Error,
 	)
 	if err != nil {
@@ -195,9 +198,9 @@ func (s *Store) RequestByRequestID(rid string) (*Request, error) {
 	return r, nil
 }
 
-// UsageFilter selects rows for usage aggregates. Only create rows are
-// aggregated; count_tokens and search rows are not. Zero values mean "no
-// constraint".
+// UsageFilter selects rows for usage aggregates. Rows of the auxiliary
+// operations, count_tokens and search, are never aggregated. Zero values mean
+// "no constraint".
 type UsageFilter struct {
 	Since, Until time.Time // Since inclusive, Until exclusive
 	Protocol     string
@@ -208,7 +211,7 @@ type UsageFilter struct {
 
 func (f UsageFilter) where() *where {
 	w := &where{}
-	w.add(`operation = 'create'`)
+	w.add(`operation NOT IN ('count_tokens', 'search')`)
 	if !f.Since.IsZero() {
 		w.add(`ts >= ?`, f.Since.UnixMilli())
 	}

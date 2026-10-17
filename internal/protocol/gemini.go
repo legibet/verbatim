@@ -49,13 +49,13 @@ func (geminiProtocol) Suffix(op Operation, model string) string {
 func (geminiProtocol) ModelsSuffix() string { return "/v1beta/models" }
 
 // ModelFromBody returns "" and no error: the model is in the URL.
-func (geminiProtocol) ModelFromBody([]byte) (string, error) { return "", nil }
+func (geminiProtocol) ModelFromBody([]byte, string) (string, error) { return "", nil }
 
 // SetModel returns body unchanged: the model is in the URL.
-func (geminiProtocol) SetModel(body []byte, _ string) ([]byte, error) { return body, nil }
+func (geminiProtocol) SetModel(body []byte, _, _ string) ([]byte, error) { return body, nil }
 
 // Stream is false: Gemini selects streaming by method name, not by body.
-func (geminiProtocol) Stream([]byte) bool { return false }
+func (geminiProtocol) Stream([]byte, string) bool { return false }
 
 func (geminiProtocol) DefaultAuth() AuthScheme { return AuthXGoogAPIKey }
 

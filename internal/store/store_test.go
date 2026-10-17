@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -103,6 +104,35 @@ func seed(t *testing.T, s *Store) {
 	flush(t, s, len(fixture))
 }
 
+// A database written by an older binary is migrated in place: its rows are
+// kept and the new columns read as NULL.
+func TestMigrateFromVersion1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(migrations[0] + `; PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO requests (ts, request_id, protocol, operation, client_model, status, outcome,
+		stream, attempts, attempts_ms, total_ms, routing_json, attempt_log, input_tokens)
+		VALUES (1, 'old', 'chat', 'create', 'm', 200, 'completed', 0, 1, 0, 5, '{}', '[]', 7)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := open(path, 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r, err := s.RequestByRequestID("old")
+	if err != nil || *r.InputTokens != 7 || r.InputImageTokens != nil {
+		t.Fatalf("old row after migration: %+v, %v", r, err)
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	s := openTest(t, 16)
 	in := &Request{
@@ -114,6 +144,7 @@ func TestRoundTrip(t *testing.T) {
 		RoutingJSON: `{"route":"m"}`, AttemptLog: `[]`, AffinityKey: ptr("k"),
 		InputTokens: ptr(int64(1)), CacheReadTokens: ptr(int64(2)), CacheWriteTokens: ptr(int64(3)),
 		CacheWrite1hTokens: ptr(int64(1)), OutputTokens: ptr(int64(4)), ReasoningTokens: ptr(int64(2)),
+		InputImageTokens: ptr(int64(1)), OutputImageTokens: ptr(int64(3)),
 		UsageJSON: ptr(`{"x":1}`), CostUSD: ptr(1.5), PriceKey: ptr("m"), PriceJSON: ptr(`{}`), Error: nil,
 	}
 	s.Record(in)
@@ -168,7 +199,8 @@ func deref(r Request) map[string]any {
 		"ttfb": num(r.TTFBMS), "total": r.TotalMS, "routing": r.RoutingJSON, "alog": r.AttemptLog,
 		"akey": str(r.AffinityKey), "in": num(r.InputTokens), "cr": num(r.CacheReadTokens),
 		"cw": num(r.CacheWriteTokens), "cw1h": num(r.CacheWrite1hTokens), "out": num(r.OutputTokens),
-		"reason": num(r.ReasoningTokens), "usage": str(r.UsageJSON), "cost": cost,
+		"reason": num(r.ReasoningTokens), "inimg": num(r.InputImageTokens), "outimg": num(r.OutputImageTokens),
+		"usage": str(r.UsageJSON), "cost": cost,
 		"pkey": str(r.PriceKey), "pjson": str(r.PriceJSON), "err": str(r.Error),
 	}
 }

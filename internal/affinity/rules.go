@@ -26,7 +26,7 @@ func Compile(cfg config.Affinity) (*Rules, error) {
 	if cfg.Fallback != "prefix_hash" && cfg.Fallback != "none" {
 		return nil, fmt.Errorf("affinity.fallback: must be prefix_hash or none, got %q", cfg.Fallback)
 	}
-	known := []protocol.ID{protocol.Chat, protocol.Responses, protocol.Anthropic, protocol.Gemini}
+	known := []protocol.ID{protocol.Chat, protocol.Responses, protocol.Anthropic, protocol.Gemini, protocol.Images}
 	for i, r := range cfg.Rules {
 		if r.Match.Protocol != "" && !slices.Contains(known, protocol.ID(r.Match.Protocol)) {
 			return nil, fmt.Errorf("affinity.rules[%d].match.protocol: unknown protocol %q", i, r.Match.Protocol)

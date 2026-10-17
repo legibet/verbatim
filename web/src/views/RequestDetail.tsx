@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import {
+  isAuxiliary,
   isRequestRow,
   parseAttempts,
   parsePrices,
@@ -290,7 +291,7 @@ function RoutingView({ r, routing, attempts }: { r: RequestRow; routing: Routing
 const usd = (n: number) => `$${n.toFixed(6)}`
 
 function CostView({ r, prices }: { r: RequestRow; prices: Prices | null }) {
-  if (r.operation !== "create") return <Muted>{r.operation} requests are not priced.</Muted>
+  if (isAuxiliary(r.operation)) return <Muted>{r.operation} requests are not priced.</Muted>
   if (r.cost_usd === null || prices === null) {
     if (r.usage_json === null) return <Muted>No usage was recorded, so there is no cost.</Muted>
     if (r.input_tokens === null || r.output_tokens === null)
@@ -301,36 +302,24 @@ function CostView({ r, prices }: { r: RequestRow; prices: Prices | null }) {
         <Mark tone="none" className="font-medium">
           No price
         </Mark>
-        <p className="max-w-[60ch] text-muted-foreground">
-          No price table entry matches {names.map((n, i) => <span key={n}>{i > 0 && " or "}<Code>{n}</Code></span>)}, directly or
-          through an alias. Map <Code>{r.client_model}</Code> to a priced model in <Code>pricing.aliases</Code>, or price it in{" "}
-          <Code>pricing.overrides</Code>.
-        </p>
-        <p className="max-w-[60ch] text-muted-foreground">
-          A priced model without a cache read price also leaves requests with cache reads unpriced.
-        </p>
+        {r.price_key === null ? (
+          <p className="max-w-[60ch] text-muted-foreground">
+            No price table entry matches {names.map((n, i) => <span key={n}>{i > 0 && " or "}<Code>{n}</Code></span>)}, directly
+            or through an alias. Map <Code>{r.client_model}</Code> to a priced model in <Code>pricing.aliases</Code>, or price it in{" "}
+            <Code>pricing.overrides</Code>.
+          </p>
+        ) : (
+          <p className="max-w-[60ch] text-muted-foreground">
+            <Code>{r.price_key}</Code> is priced, but not for all of this usage: cache reads need a cache read price, an image
+            request needs image prices (image_input, image_output in the overrides), and those need the upstream to report the
+            image tokens.
+          </p>
+        )}
       </div>
     )
   }
 
-  const cw1h = r.cache_write_1h_tokens ?? 0
-  const lines: { label: string; tokens: number | null; price: number | null; note?: string }[] = [
-    { label: "Input", tokens: r.input_tokens, price: prices.input },
-    { label: "Cache read", tokens: r.cache_read_tokens, price: prices.cache_read },
-    {
-      label: cw1h > 0 ? "Cache write, 5 min" : "Cache write",
-      tokens: r.cache_write_tokens === null ? null : r.cache_write_tokens - cw1h,
-      price: prices.cache_write,
-    },
-    ...(cw1h > 0 ? [{ label: "Cache write, 1 hour", tokens: cw1h, price: prices.cache_write_1h }] : []),
-    {
-      label: "Output",
-      tokens: r.output_tokens,
-      price: prices.output,
-      note: r.reasoning_tokens ? `includes ${fmtInt(r.reasoning_tokens)} reasoning` : undefined,
-    },
-  ]
-
+  const lines = prices.image_input != null || prices.image_output != null ? imageLines(r, prices) : tokenLines(r, prices)
   return (
     <div className="space-y-2">
       <table className="w-full border-separate border-spacing-0 overflow-hidden rounded-lg border text-[12.5px] [&_td]:h-8 [&_td]:border-t [&_td]:border-rule [&_td]:px-3 [&_th]:h-7 [&_th]:bg-surface [&_th]:px-3 [&_th]:text-right [&_th]:text-[11.5px] [&_th]:font-medium [&_th]:text-muted-foreground">
@@ -375,6 +364,41 @@ function CostView({ r, prices }: { r: RequestRow; prices: Prices | null }) {
       </p>
     </div>
   )
+}
+
+type CostLine = { label: string; tokens: number | null; price: number | null; note?: string }
+
+function tokenLines(r: RequestRow, prices: Prices): CostLine[] {
+  const cw1h = r.cache_write_1h_tokens ?? 0
+  return [
+    { label: "Input", tokens: r.input_tokens, price: prices.input },
+    { label: "Cache read", tokens: r.cache_read_tokens, price: prices.cache_read },
+    {
+      label: cw1h > 0 ? "Cache write, 5 min" : "Cache write",
+      tokens: r.cache_write_tokens === null ? null : r.cache_write_tokens - cw1h,
+      price: prices.cache_write,
+    },
+    ...(cw1h > 0 ? [{ label: "Cache write, 1 hour", tokens: cw1h, price: prices.cache_write_1h }] : []),
+    {
+      label: "Output",
+      tokens: r.output_tokens,
+      price: prices.output,
+      note: r.reasoning_tokens ? `includes ${fmtInt(r.reasoning_tokens)} reasoning` : undefined,
+    },
+  ]
+}
+
+// imageLines splits a priced image request's tokens as the cost was computed:
+// a model without a text output price has only image output.
+function imageLines(r: RequestRow, prices: Prices): CostLine[] {
+  const imageIn = r.input_image_tokens ?? 0
+  const imageOut = r.output_image_tokens ?? (prices.output === null ? (r.output_tokens ?? 0) : 0)
+  return [
+    { label: "Text input", tokens: (r.input_tokens ?? 0) - imageIn, price: prices.input },
+    { label: "Image input", tokens: imageIn, price: prices.image_input ?? null },
+    { label: "Text output", tokens: (r.output_tokens ?? 0) - imageOut, price: prices.output },
+    { label: "Image output", tokens: imageOut, price: prices.image_output ?? null },
+  ]
 }
 
 function Code({ children }: { children: ReactNode }) {

@@ -14,7 +14,7 @@ import (
 // that carry the model name and the stream flag in the JSON body.
 type bodyModel struct{}
 
-func (bodyModel) ModelFromBody(body []byte) (string, error) {
+func (bodyModel) ModelFromBody(body []byte, _ string) (string, error) {
 	m := gjson.GetBytes(body, "model")
 	switch {
 	case !m.Exists():
@@ -27,7 +27,7 @@ func (bodyModel) ModelFromBody(body []byte) (string, error) {
 	return m.Str, nil
 }
 
-func (bodyModel) SetModel(body []byte, model string) ([]byte, error) {
+func (bodyModel) SetModel(body []byte, _, model string) ([]byte, error) {
 	out, err := sjson.SetBytes(body, "model", model)
 	if err != nil {
 		return nil, fmt.Errorf("set model: %w", err)
@@ -35,7 +35,7 @@ func (bodyModel) SetModel(body []byte, model string) ([]byte, error) {
 	return out, nil
 }
 
-func (bodyModel) Stream(body []byte) bool {
+func (bodyModel) Stream(body []byte, _ string) bool {
 	return gjson.GetBytes(body, "stream").Type == gjson.True
 }
 

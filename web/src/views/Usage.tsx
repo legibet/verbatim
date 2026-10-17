@@ -34,7 +34,7 @@ export function Usage() {
           label="Protocol"
           value={protocol}
           onChange={setProtocol}
-          options={["chat", "responses", "anthropic", "gemini"]}
+          options={["chat", "responses", "anthropic", "gemini", "images"]}
         />
         <FilterSelect label="Provider" value={provider} onChange={setProvider} options={providerNames} />
         <div className="ml-auto flex items-center gap-2">

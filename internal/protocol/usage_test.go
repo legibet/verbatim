@@ -338,23 +338,28 @@ func TestStreamUsage(t *testing.T) {
 
 func TestStreamBounds(t *testing.T) {
 	small := `data: {"id":"a","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}` + "\n\n"
-	huge := `data: {"id":"huge","choices":[],"pad":"` + strings.Repeat("x", 2<<20) + `","usage":{"prompt_tokens":99,"completion_tokens":99}}` + "\n\n"
+	// Over maxEventBytes in many small values: skipped.
+	wide := `data: {"id":"wide","choices":[],"pad":[` + strings.Repeat("0,", 1<<20) + `0],"usage":{"prompt_tokens":99,"completion_tokens":99}}` + "\n\n"
+	// Over maxEventBytes in one string, as an image is: the string is
+	// dropped and the event read.
+	long := `data: {"id":"long","choices":[],"b64_json":"` + strings.Repeat("x", 2<<20) + `","usage":{"prompt_tokens":5,"completion_tokens":5}}` + "\n\n"
 	after := `data: {"id":"after","choices":[{"index":0,"delta":{}}],"usage":null}` + "\n\n"
 	done := "data: [DONE]\n\n"
 	late := `data: {"id":"late","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":7}}` + "\n\n"
 
 	for _, n := range []int{0, 7, 4096} {
 		p := Lookup(Chat).NewUsageParser(Create, true)
-		feed(p, small+huge+after+done+late, n)
+		feed(p, small+wide+long+after+done+late, n)
 		u, ok := p.Usage()
-		if !ok || show(u) != "in=10 cr=- cw=- cw1h=- out=2 rs=-" {
-			t.Errorf("chunk %d: usage = %s (ok %v); the oversized event must be skipped", n, show(u), ok)
+		if !ok || show(u) != "in=5 cr=- cw=- cw1h=- out=5 rs=-" {
+			t.Errorf("chunk %d: usage = %s (ok %v); want the long-string event's, not the wide one's", n, show(u), ok)
 		}
 		if got := p.ResponseID(); got != "after" {
-			t.Errorf("chunk %d: response id = %q, want the event after the oversized one, and nothing after [DONE]", n, got)
+			t.Errorf("chunk %d: response id = %q, want the last event before [DONE]", n, got)
 		}
-		if sp := p.(*streamParser); cap(sp.sse.line) > 2*maxEventBytes || cap(sp.sse.data) > 2*maxEventBytes {
-			t.Errorf("chunk %d: splitter kept %d/%d bytes", n, cap(sp.sse.line), cap(sp.sse.data))
+		sp := p.(*streamParser)
+		if cap(sp.sse.line) > 2*maxEventBytes || cap(sp.sse.data) > 2*maxEventBytes || cap(sp.elider.content) > 2*maxStringBytes {
+			t.Errorf("chunk %d: parser kept %d/%d/%d bytes", n, cap(sp.sse.line), cap(sp.sse.data), cap(sp.elider.content))
 		}
 	}
 }
@@ -482,8 +487,19 @@ func TestBodyUsage(t *testing.T) {
 func TestBodyBounds(t *testing.T) {
 	usage := `,"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 
+	// A body far over the limit in one string, as an image response is.
 	p := Lookup(Chat).NewUsageParser(Create, false)
-	feed(p, `{"id":"big","pad":"`+strings.Repeat("x", maxBodyBytes)+`"`+usage, 1<<16)
+	feed(p, `{"id":"big","b64_json":"`+strings.Repeat("x", 2*maxBodyBytes)+`"`+usage, 1<<16)
+	if u, ok := p.Usage(); !ok || show(u) != "in=1 cr=- cw=- cw1h=- out=1 rs=-" || p.ResponseID() != "big" {
+		t.Errorf("usage from a body with a long string: %s (ok %v)", show(u), ok)
+	}
+	if n := len(p.(*bodyParser).buf); n > 1<<10 {
+		t.Errorf("long string kept: %d bytes buffered", n)
+	}
+
+	// A body over the limit in many small values.
+	p = Lookup(Chat).NewUsageParser(Create, false)
+	feed(p, `{"id":"wide","pad":[`+strings.Repeat("0,", maxBodyBytes/2)+`0]`+usage, 1<<16)
 	if u, ok := p.Usage(); ok {
 		t.Errorf("usage from a body over the limit: %s", show(u))
 	}

@@ -71,6 +71,8 @@ var migrations = []string{
 		ts             INTEGER NOT NULL
 	);
 	CREATE INDEX owned_responses_ts ON owned_responses(ts);`,
+	`ALTER TABLE requests ADD COLUMN input_image_tokens INTEGER;
+	ALTER TABLE requests ADD COLUMN output_image_tokens INTEGER;`,
 }
 
 // Store is the request log and ownership table. Rows are written by a single
@@ -226,8 +228,8 @@ const insertSQL = `INSERT INTO requests (
 	provider, upstream_model, status, outcome, stream, attempts, attempts_ms, ttfb_ms,
 	total_ms, routing_json, attempt_log, affinity_key, input_tokens, cache_read_tokens,
 	cache_write_tokens, cache_write_1h_tokens, output_tokens, reasoning_tokens,
-	usage_json, cost_usd, price_key, price_json, error
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	input_image_tokens, output_image_tokens, usage_json, cost_usd, price_key, price_json, error
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // insert writes a batch in one transaction; a row that fails is logged and
 // skipped so it cannot take the rest of the batch with it.
@@ -249,7 +251,7 @@ func (s *Store) insert(batch []*Request) {
 			r.Provider, r.UpstreamModel, r.Status, r.Outcome, r.Stream, r.Attempts, r.AttemptsMS, r.TTFBMS,
 			r.TotalMS, r.RoutingJSON, r.AttemptLog, r.AffinityKey, r.InputTokens, r.CacheReadTokens,
 			r.CacheWriteTokens, r.CacheWrite1hTokens, r.OutputTokens, r.ReasoningTokens,
-			r.UsageJSON, r.CostUSD, r.PriceKey, r.PriceJSON, r.Error,
+			r.InputImageTokens, r.OutputImageTokens, r.UsageJSON, r.CostUSD, r.PriceKey, r.PriceJSON, r.Error,
 		)
 		if err != nil {
 			slog.Warn("log row not written", "request_id", r.RequestID, "err", err)

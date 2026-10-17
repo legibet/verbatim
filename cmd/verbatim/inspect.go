@@ -302,6 +302,8 @@ func showRequest(st *store.Store, requestID string, asJSON bool) int {
 		{"cache_write_1h_tokens", optCount(r.CacheWrite1hTokens)},
 		{"output_tokens", optCount(r.OutputTokens)},
 		{"reasoning_tokens", optCount(r.ReasoningTokens)},
+		{"input_image_tokens", optCount(r.InputImageTokens)},
+		{"output_image_tokens", optCount(r.OutputImageTokens)},
 		{"cost_usd", optCost(r.CostUSD)},
 		{"price_key", optString(r.PriceKey)},
 	}

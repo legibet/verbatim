@@ -184,6 +184,95 @@ func TestCost(t *testing.T) {
 	}
 }
 
+func TestCostImages(t *testing.T) {
+	ov := filepath.Join(t.TempDir(), "overrides.json")
+	writeJSON(t, ov, m{"models": m{
+		"gpt-image-2": m{"cost": m{"input": 5, "cache_read": 1.25, "image_input": 8, "image_output": 30}},
+		"image-text":  m{"cost": m{"input": 5, "output": 10, "image_input": 8, "image_output": 32}},
+		"text-only":   m{"cost": m{"input": 5, "output": 30}},
+		"no-output":   m{"cost": m{"input": 5, "image_input": 8}},
+		"output-only": m{"cost": m{"input": 5, "image_output": 30}},
+		"input-only":  m{"cost": m{"input": 5, "output": 10, "image_input": 8}},
+	}})
+	tab, warnings, err := Load(t.TempDir(), nil, ov, nil)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], `"no-output"`) {
+		t.Fatalf("err %v, warnings %q", err, warnings)
+	}
+	price := func(m string) Price {
+		_, p, ok := tab.Lookup(m, "")
+		if !ok {
+			t.Fatalf("%s not priced", m)
+		}
+		return p
+	}
+	tests := []struct {
+		name  string
+		model string
+		u     protocol.Usage
+		want  float64
+		units string
+	}{
+		{
+			// No text output price, so all output is image output.
+			name: "generate", model: "gpt-image-2",
+			u:     protocol.Usage{Input: n(12), InputImage: n(0), Output: n(515)},
+			want:  (12*5 + 515*30) / 1e6,
+			units: `{"source":"overrides","input":5,"cache_read":1.25,"cache_write":5,"cache_write_1h":5,"output":null,"image_input":8,"image_output":30}`,
+		},
+		{
+			name: "edit", model: "gpt-image-2",
+			u:    protocol.Usage{Input: n(276), InputImage: n(256), Output: n(515), OutputImage: n(515)},
+			want: (20*5 + 256*8 + 515*30) / 1e6,
+		},
+		{
+			name: "text and image output", model: "image-text",
+			u:    protocol.Usage{Input: n(20), InputImage: n(0), Output: n(530), OutputImage: n(515)},
+			want: (20*5 + 15*10 + 515*32) / 1e6,
+		},
+		{
+			// A generation reports no input image tokens, so none need a price.
+			name: "image output price only", model: "output-only",
+			u:    protocol.Usage{Input: n(12), InputImage: n(0), Output: n(515)},
+			want: (12*5 + 515*30) / 1e6,
+		},
+		{
+			// Without image tokens reported, a text-only price applies as usual.
+			name: "text price, no image tokens", model: "text-only",
+			u:    protocol.Usage{Input: n(12), InputImage: n(0), Output: n(515)},
+			want: (12*5 + 515*30) / 1e6,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, units, ok := Cost(tt.u, price(tt.model))
+			if !ok || !near(got, tt.want) {
+				t.Fatalf("cost = %v, %v; want %v", got, ok, tt.want)
+			}
+			if tt.units != "" && string(units) != tt.units {
+				t.Fatalf("price json = %s\nwant %s", units, tt.units)
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name  string
+		model string
+		u     protocol.Usage
+	}{
+		{"input image tokens not reported", "gpt-image-2", protocol.Usage{Input: n(276), Output: n(515), OutputImage: n(515)}},
+		{"text output without a text output price", "gpt-image-2", protocol.Usage{Input: n(12), InputImage: n(0), Output: n(515), OutputImage: n(500)}},
+		{"output image tokens not reported", "image-text", protocol.Usage{Input: n(12), InputImage: n(0), Output: n(515)}},
+		{"input image tokens not reported, image output price only", "output-only", protocol.Usage{Input: n(276), Output: n(515)}},
+		{"output image tokens not reported, image input price only", "input-only", protocol.Usage{Input: n(276), InputImage: n(256), Output: n(515)}},
+		{"image input without an image price", "text-only", protocol.Usage{Input: n(276), InputImage: n(256), Output: n(515)}},
+		{"image output without an image price", "text-only", protocol.Usage{Input: n(12), InputImage: n(0), Output: n(515), OutputImage: n(515)}},
+	} {
+		if usd, _, ok := Cost(tt.u, price(tt.model)); ok {
+			t.Errorf("%s: priced at %v, want no cost", tt.name, usd)
+		}
+	}
+}
+
 func writeJSON(t *testing.T, name string, v any) {
 	t.Helper()
 	b, err := json.Marshal(v)

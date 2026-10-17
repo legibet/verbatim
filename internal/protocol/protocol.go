@@ -12,18 +12,24 @@ const (
 	Responses ID = "responses"
 	Anthropic ID = "anthropic"
 	Gemini    ID = "gemini"
+	Images    ID = "images"
 )
 
-// Operation is what a request asks of the upstream. Only create is priced,
-// creates or moves pins, and feeds the breaker; the others follow a pin and
-// are left out of usage aggregates (design 4).
+// Operation is what a request asks of the upstream (design 4).
 type Operation string
 
 const (
 	Create      Operation = "create"
 	CountTokens Operation = "count_tokens"
-	Search      Operation = "search" // Codex's standalone web search, /alpha/search
+	Search      Operation = "search"   // Codex's standalone web search, /alpha/search
+	Generate    Operation = "generate" // images/generations
+	Edit        Operation = "edit"     // images/edits
 )
+
+// Auxiliary reports whether op is count_tokens or search, which serve the
+// create requests of a session: they follow a pin but never create or move
+// one, never feed the breaker, and are neither priced nor aggregated as usage.
+func (op Operation) Auxiliary() bool { return op == CountTokens || op == Search }
 
 type AuthScheme string
 
@@ -43,6 +49,8 @@ type Usage struct {
 	CacheWrite1h *int64 // subset written with a 1-hour TTL (Anthropic only)
 	Output       *int64 // includes reasoning
 	Reasoning    *int64 // subset of Output, when reported
+	InputImage   *int64 // image tokens, subset of Input (images only)
+	OutputImage  *int64 // image tokens, subset of Output (images only)
 	Raw          []byte // the provider's usage object exactly as received
 }
 
@@ -75,13 +83,14 @@ type Protocol interface {
 	Suffix(op Operation, model string) string
 	// ModelsSuffix is the path of the provider's model list.
 	ModelsSuffix() string
-	// ModelFromBody extracts the model name from a request body.
-	ModelFromBody(body []byte) (string, error)
-	// SetModel rewrites the model name in place (sjson point update).
-	// A no-op for protocols whose model lives in the URL.
-	SetModel(body []byte, model string) ([]byte, error)
+	// ModelFromBody extracts the model name from a request body; contentType
+	// is the request's Content-Type, which tells a multipart body (images).
+	ModelFromBody(body []byte, contentType string) (string, error)
+	// SetModel rewrites the model name in place (a point update; nothing else
+	// in the body changes). A no-op for protocols whose model lives in the URL.
+	SetModel(body []byte, contentType, model string) ([]byte, error)
 	// Stream reports whether the request asks for a streamed response.
-	Stream(body []byte) bool
+	Stream(body []byte, contentType string) bool
 	DefaultAuth() AuthScheme
 	// DefaultHeaders adds the headers the protocol requires when the client
 	// did not send them (anthropic-version only).
@@ -101,7 +110,7 @@ type Protocol interface {
 }
 
 // All lists the protocols verbatim serves, in a fixed order.
-var All = []Protocol{chatProtocol{}, responsesProtocol{}, anthropicProtocol{}, geminiProtocol{}}
+var All = []Protocol{chatProtocol{}, responsesProtocol{}, anthropicProtocol{}, geminiProtocol{}, imagesProtocol{}}
 
 // Lookup returns the protocol with the given id, or nil.
 func Lookup(id ID) Protocol {
