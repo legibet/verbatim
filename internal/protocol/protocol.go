@@ -81,8 +81,11 @@ type Protocol interface {
 	// the suffix carries the version for anthropic and gemini but not for
 	// the OpenAI protocols, whose SDK base URL already ends in /v1.
 	Suffix(op Operation, model string) string
-	// ModelsSuffix is the path of the provider's model list.
-	ModelsSuffix() string
+	// ModelsPath is the path and query of one page of the provider's model
+	// list, appended to base_url: the first page when after is empty, else
+	// the page after the cursor ModelList returned. Protocols whose lists
+	// are paged ask for the largest page they allow.
+	ModelsPath(after string) string
 	// ModelFromBody extracts the model name from a request body; contentType
 	// is the request's Content-Type, which tells a multipart body (images).
 	ModelFromBody(body []byte, contentType string) (string, error)
@@ -104,9 +107,9 @@ type Protocol interface {
 	NewUsageParser(op Operation, stream bool) UsageParser
 	// ErrorBody renders a verbatim-generated error in the native shape (design 10).
 	ErrorBody(status int, code, msg string) []byte
-	// ModelList parses the body of the model list. hasMore and lastID
-	// drive Anthropic-style pagination (?after_id=).
-	ModelList(body []byte) (ids []string, hasMore bool, lastID string)
+	// ModelList parses one page of the model list. next is the cursor for
+	// the following page, empty on the last one.
+	ModelList(body []byte) (ids []string, next string)
 }
 
 // All lists the protocols verbatim serves, in a fixed order.

@@ -21,7 +21,7 @@ func (chatProtocol) Match(method, path string) (Operation, string, bool) {
 
 func (chatProtocol) Suffix(Operation, string) string { return "/chat/completions" }
 
-func (chatProtocol) ModelsSuffix() string { return "/models" }
+func (chatProtocol) ModelsPath(after string) string { return openAIModelsPath(after) }
 
 func (chatProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
@@ -103,4 +103,4 @@ func openAIErrorBody(code, msg string) []byte {
 	return b
 }
 
-func (chatProtocol) ModelList(body []byte) ([]string, bool, string) { return dataModelList(body) }
+func (chatProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }

@@ -32,7 +32,7 @@ func (responsesProtocol) Suffix(op Operation, _ string) string {
 	return "/responses"
 }
 
-func (responsesProtocol) ModelsSuffix() string { return "/models" }
+func (responsesProtocol) ModelsPath(after string) string { return openAIModelsPath(after) }
 
 func (responsesProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
@@ -93,4 +93,4 @@ func observeResponses(st *usageState, _ string, obj gjson.Result) {
 
 func (responsesProtocol) ErrorBody(_ int, code, msg string) []byte { return openAIErrorBody(code, msg) }
 
-func (responsesProtocol) ModelList(body []byte) ([]string, bool, string) { return dataModelList(body) }
+func (responsesProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }

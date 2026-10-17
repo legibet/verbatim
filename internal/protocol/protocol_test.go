@@ -366,14 +366,33 @@ func TestErrorBody(t *testing.T) {
 	}
 }
 
+func TestModelsPath(t *testing.T) {
+	tests := []struct {
+		id           ID
+		first, after string
+	}{
+		{Chat, "/models", "/models?after_id=a%2Fb"},
+		{Anthropic, "/v1/models?limit=1000", "/v1/models?after_id=a%2Fb&limit=1000"},
+		{Gemini, "/v1beta/models?pageSize=1000", "/v1beta/models?pageSize=1000&pageToken=a%2Fb"},
+	}
+	for _, tt := range tests {
+		p := Lookup(tt.id)
+		if got := p.ModelsPath(""); got != tt.first {
+			t.Errorf("%s first page = %q, want %q", tt.id, got, tt.first)
+		}
+		if got := p.ModelsPath("a/b"); got != tt.after {
+			t.Errorf("%s next page = %q, want %q", tt.id, got, tt.after)
+		}
+	}
+}
+
 func TestModelList(t *testing.T) {
 	tests := []struct {
-		name    string
-		id      ID
-		body    string
-		ids     []string
-		hasMore bool
-		lastID  string
+		name string
+		id   ID
+		body string
+		ids  []string
+		next string
 	}{
 		{
 			name: "openai",
@@ -382,20 +401,11 @@ func TestModelList(t *testing.T) {
 			ids:  []string{"gpt-5.6", "gpt-5.6-mini"},
 		},
 		{
-			name:    "openai-compatible page",
-			id:      Responses,
-			body:    `{"data":[{"id":"a"},{"id":""},{"id":3}],"has_more":true,"last_id":"a"}`,
-			ids:     []string{"a"},
-			hasMore: true,
-			lastID:  "a",
-		},
-		{
-			name:    "chat page",
-			id:      Chat,
-			body:    `{"object":"list","data":[{"id":"x"},{"id":"y"}],"has_more":true,"last_id":"y"}`,
-			ids:     []string{"x", "y"},
-			hasMore: true,
-			lastID:  "y",
+			name: "openai-compatible page",
+			id:   Responses,
+			body: `{"data":[{"id":"a"},{"id":""},{"id":3}],"has_more":true,"last_id":"a"}`,
+			ids:  []string{"a"},
+			next: "a",
 		},
 		{
 			name: "chat has_more without last_id",
@@ -404,31 +414,30 @@ func TestModelList(t *testing.T) {
 			ids:  []string{"x"},
 		},
 		{
-			name:    "anthropic page",
-			id:      Anthropic,
-			body:    `{"data":[{"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5","created_at":"2026-03-01T00:00:00Z"},{"type":"model","id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5","created_at":"2026-03-01T00:00:00Z"}],"has_more":true,"first_id":"claude-opus-5-5","last_id":"claude-sonnet-5-5"}`,
-			ids:     []string{"claude-opus-5-5", "claude-sonnet-5-5"},
-			hasMore: true,
-			lastID:  "claude-sonnet-5-5",
-		},
-		{
-			name:   "anthropic last page",
-			id:     Anthropic,
-			body:   `{"data":[{"type":"model","id":"claude-haiku-5-5"}],"has_more":false,"first_id":"claude-haiku-5-5","last_id":"claude-haiku-5-5"}`,
-			ids:    []string{"claude-haiku-5-5"},
-			lastID: "claude-haiku-5-5",
-		},
-		{
-			name: "anthropic has_more without last_id",
+			name: "anthropic page",
 			id:   Anthropic,
-			body: `{"data":[{"id":"m"}],"has_more":true}`,
-			ids:  []string{"m"},
+			body: `{"data":[{"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5","created_at":"2026-03-01T00:00:00Z"},{"type":"model","id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5","created_at":"2026-03-01T00:00:00Z"}],"has_more":true,"first_id":"claude-opus-5-5","last_id":"claude-sonnet-5-5"}`,
+			ids:  []string{"claude-opus-5-5", "claude-sonnet-5-5"},
+			next: "claude-sonnet-5-5",
 		},
 		{
-			name: "gemini",
+			name: "anthropic last page",
+			id:   Anthropic,
+			body: `{"data":[{"type":"model","id":"claude-haiku-5-5"}],"has_more":false,"first_id":"claude-haiku-5-5","last_id":"claude-haiku-5-5"}`,
+			ids:  []string{"claude-haiku-5-5"},
+		},
+		{
+			name: "gemini page",
 			id:   Gemini,
 			body: `{"models":[{"name":"models/gemini-3.1-pro","version":"3.1","displayName":"Gemini 3.1 Pro","supportedGenerationMethods":["generateContent","countTokens"]},{"name":"models/gemini-3.1-flash"}],"nextPageToken":"abc"}`,
 			ids:  []string{"gemini-3.1-pro", "gemini-3.1-flash"},
+			next: "abc",
+		},
+		{
+			name: "gemini last page",
+			id:   Gemini,
+			body: `{"models":[{"name":"models/gemini-3.1-pro"}]}`,
+			ids:  []string{"gemini-3.1-pro"},
 		},
 		{name: "empty list", id: Chat, body: `{"object":"list","data":[]}`, ids: []string{}},
 		{name: "not a list", id: Chat, body: `{"error":{"message":"bad key"}}`},
@@ -437,9 +446,9 @@ func TestModelList(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ids, hasMore, lastID := Lookup(tt.id).ModelList([]byte(tt.body))
-			if !slices.Equal(ids, tt.ids) || (ids == nil) != (tt.ids == nil) || hasMore != tt.hasMore || lastID != tt.lastID {
-				t.Fatalf("got %#v, %v, %q; want %#v, %v, %q", ids, hasMore, lastID, tt.ids, tt.hasMore, tt.lastID)
+			ids, next := Lookup(tt.id).ModelList([]byte(tt.body))
+			if !slices.Equal(ids, tt.ids) || (ids == nil) != (tt.ids == nil) || next != tt.next {
+				t.Fatalf("got %#v, %q; want %#v, %q", ids, next, tt.ids, tt.next)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -95,15 +96,25 @@ func modelIDs(body []byte, listPath, idPath, trimPrefix string) []string {
 	return ids
 }
 
+// openAIModelsPath is the OpenAI-style model list path. OpenAI does not page
+// it; an OpenAI-compatible relay that does takes after_id like Anthropic.
+func openAIModelsPath(after string) string {
+	if after == "" {
+		return "/models"
+	}
+	return "/models?after_id=" + url.QueryEscape(after)
+}
+
 // dataModelList reads an OpenAI- or Anthropic-style model list page: ids from
-// data[].id, plus has_more and last_id where the provider paginates (Anthropic
-// always, OpenAI-compatible relays sometimes). hasMore is reported only
-// together with the last_id needed to fetch the next page.
-func dataModelList(body []byte) (ids []string, hasMore bool, lastID string) {
+// data[].id, and as the next cursor the last_id when has_more is true
+// (Anthropic always pages, OpenAI-compatible relays sometimes).
+func dataModelList(body []byte) (ids []string, next string) {
 	ids = modelIDs(body, "data", "id", "")
 	if ids == nil {
-		return nil, false, ""
+		return nil, ""
 	}
-	lastID = gjson.GetBytes(body, "last_id").Str
-	return ids, gjson.GetBytes(body, "has_more").Type == gjson.True && lastID != "", lastID
+	if gjson.GetBytes(body, "has_more").Type == gjson.True {
+		next = gjson.GetBytes(body, "last_id").Str
+	}
+	return ids, next
 }

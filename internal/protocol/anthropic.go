@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/tidwall/gjson"
 )
@@ -36,7 +37,13 @@ func (anthropicProtocol) Suffix(op Operation, _ string) string {
 	return "/v1/messages"
 }
 
-func (anthropicProtocol) ModelsSuffix() string { return "/v1/models" }
+func (anthropicProtocol) ModelsPath(after string) string {
+	q := url.Values{"limit": {"1000"}}
+	if after != "" {
+		q.Set("after_id", after)
+	}
+	return "/v1/models?" + q.Encode()
+}
 
 func (anthropicProtocol) DefaultAuth() AuthScheme { return AuthXAPIKey }
 
@@ -123,4 +130,4 @@ func (anthropicProtocol) ErrorBody(_ int, code, msg string) []byte {
 	return b
 }
 
-func (anthropicProtocol) ModelList(body []byte) ([]string, bool, string) { return dataModelList(body) }
+func (anthropicProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }

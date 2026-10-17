@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -46,7 +47,13 @@ func (geminiProtocol) Suffix(op Operation, model string) string {
 	return "/v1beta/models/" + model + ":generateContent"
 }
 
-func (geminiProtocol) ModelsSuffix() string { return "/v1beta/models" }
+func (geminiProtocol) ModelsPath(after string) string {
+	q := url.Values{"pageSize": {"1000"}}
+	if after != "" {
+		q.Set("pageToken", after)
+	}
+	return "/v1beta/models?" + q.Encode()
+}
 
 // ModelFromBody returns "" and no error: the model is in the URL.
 func (geminiProtocol) ModelFromBody([]byte, string) (string, error) { return "", nil }
@@ -151,6 +158,10 @@ func geminiStatus(status int) string {
 
 // ModelList reads a Gemini model list; names come as "models/<id>".
 // Gemini paginates by nextPageToken, which is not followed.
-func (geminiProtocol) ModelList(body []byte) ([]string, bool, string) {
-	return modelIDs(body, "models", "name", "models/"), false, ""
+func (geminiProtocol) ModelList(body []byte) ([]string, string) {
+	ids := modelIDs(body, "models", "name", "models/")
+	if ids == nil {
+		return nil, ""
+	}
+	return ids, gjson.GetBytes(body, "nextPageToken").Str
 }

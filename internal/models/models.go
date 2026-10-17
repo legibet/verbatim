@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -21,7 +20,7 @@ import (
 )
 
 const (
-	// maxPages bounds Anthropic-style pagination (design 6.5).
+	// maxPages bounds the pages read of one model list (design 6.5).
 	maxPages = 10
 	// maxListBytes bounds one page of an endpoint's model list.
 	maxListBytes = 16 << 20
@@ -153,8 +152,8 @@ func (c *Cache) refresh(ctx context.Context, e endpoint) error {
 	return nil
 }
 
-// fetch reads the endpoint's model list, following has_more through ?after_id=
-// for at most maxPages pages.
+// fetch reads the endpoint's model list, following the next-page cursor for
+// at most maxPages pages.
 func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 	p := c.cfg.Providers[e.provider]
 	ep := p.Endpoints[e.proto]
@@ -162,11 +161,7 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 	var all []string
 	after := ""
 	for page := 1; page <= maxPages; page++ {
-		u := ep.BaseURL + proto.ModelsSuffix()
-		if after != "" {
-			u += "?after_id=" + url.QueryEscape(after)
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL+proto.ModelsPath(after), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -189,15 +184,15 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 		if resp.StatusCode/100 != 2 {
 			return nil, fmt.Errorf("%s: HTTP %d", where, resp.StatusCode)
 		}
-		ids, more, last := proto.ModelList(body)
+		ids, next := proto.ModelList(body)
 		if ids == nil {
 			return nil, fmt.Errorf("%s: response is not a model list", where)
 		}
 		all = append(all, ids...)
-		if !more {
+		if next == "" {
 			break
 		}
-		after = last
+		after = next
 	}
 	return all, nil
 }

@@ -40,7 +40,7 @@ func (imagesProtocol) Suffix(op Operation, _ string) string {
 	return "/images/generations"
 }
 
-func (imagesProtocol) ModelsSuffix() string { return "/models" }
+func (imagesProtocol) ModelsPath(after string) string { return openAIModelsPath(after) }
 
 func (imagesProtocol) ModelFromBody(body []byte, contentType string) (string, error) {
 	boundary, ok := multipartBoundary(contentType)
@@ -117,7 +117,7 @@ func imagesUsage(u gjson.Result, op Operation) Usage {
 
 func (imagesProtocol) ErrorBody(_ int, code, msg string) []byte { return openAIErrorBody(code, msg) }
 
-func (imagesProtocol) ModelList(body []byte) ([]string, bool, string) { return dataModelList(body) }
+func (imagesProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }
 
 // multipartBoundary returns the boundary of a multipart/form-data
 // Content-Type; ok is false for any other content type.

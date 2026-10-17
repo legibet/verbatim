@@ -292,7 +292,7 @@ Many clients populate their model picker from `/v1/models`, so the list has to b
 
 Names are deduplicated; the first occurrence wins. The response lists names only; it does not promise that every listed name works for every protocol.
 
-Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2) (for `gemini`, ids are returned with the `models/` prefix stripped). Anthropic-style paginated lists are followed through `has_more` up to 10 pages. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the startup round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup does not get an empty list.
+Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2) (for `gemini`, ids are returned with the `models/` prefix stripped). Where the protocol pages the list, verbatim asks for the largest page it allows (`anthropic`: `limit=1000`; `gemini`: `pageSize=1000`) and follows the next-page cursor up to 10 pages: `has_more` and `last_id` sent back as `after_id` for `anthropic` and for OpenAI-compatible relays that page, `nextPageToken` sent back as `pageToken` for `gemini`. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the startup round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup does not get an empty list.
 
 Response shape: one entry per name carrying the union of what OpenAI and Anthropic clients read, so either parser is satisfied and ignores the rest:
 
@@ -602,7 +602,7 @@ type Protocol interface {
     ID() string
     Match(method, path string) (op Operation, model string, ok bool)   // model only for gemini
     Suffix(op Operation, model string) string                          // path appended to base_url
-    ModelsSuffix() string                                              // model-list path appended to base_url
+    ModelsPath(after string) string                                    // one model-list page, appended to base_url
     ModelFromBody(body []byte) (string, error)
     SetModel(body []byte, model string) ([]byte, error)               // no-op for gemini
     DefaultAuth() AuthScheme

@@ -16,8 +16,8 @@ import (
 	"verbatim/internal/config"
 )
 
-// provider serves GET /models with the pages given, keyed by the after_id
-// query parameter, and records the headers of the last request.
+// provider serves GET /models with the pages given, keyed by the after_id or
+// pageToken query parameter, and records the headers of the last request.
 type provider struct {
 	*httptest.Server
 	header atomic.Pointer[http.Header]
@@ -30,7 +30,8 @@ func newProvider(t *testing.T, pages map[string]string) *provider {
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Clone()
 		p.header.Store(&h)
-		body, ok := pages[r.URL.Query().Get("after_id")]
+		q := r.URL.Query()
+		body, ok := pages[q.Get("after_id")+q.Get("pageToken")]
 		if p.fail.Load() || !strings.HasSuffix(r.URL.Path, "/models") || !ok {
 			w.WriteHeader(500)
 			return
@@ -58,7 +59,10 @@ func TestNamesAndFetch(t *testing.T) {
 		"":         `{"data":[{"id":"claude-a"},{"id":"claude-b"}],"has_more":true,"last_id":"claude-b"}`,
 		"claude-b": `{"data":[{"id":"claude-c"},{"id":"gpt-6"}],"has_more":false,"last_id":"gpt-6"}`,
 	})
-	gem := newProvider(t, map[string]string{"": `{"models":[{"name":"models/gemini-x"},{"name":"models/other"}]}`})
+	gem := newProvider(t, map[string]string{
+		"":   `{"models":[{"name":"models/gemini-x"}],"nextPageToken":"p2"}`,
+		"p2": `{"models":[{"name":"models/gemini-y"},{"name":"models/other"}]}`,
+	})
 	prefixed := newProvider(t, map[string]string{"": openai("openai/gpt-7", "openai/gpt-5", "openai/gpt-4x", "openai/o3", "other/gpt-8")})
 	rewrite := newProvider(t, nil) // must never be asked
 	unused := newProvider(t, nil)
@@ -115,8 +119,9 @@ routes:
 	// gpt-4o belongs to the earlier gpt-4* route; o3 matches no pattern;
 	// prefixed's ids map back through openai/gpt-* to gpt-7 and gpt-5 (already
 	// listed) and gpt-4x (owned by gpt-4*); the others do not match it.
-	// gemini ids lose their models/ prefix.
-	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c", "gemini-x"}
+	// gemini ids lose their models/ prefix, and its second page comes
+	// through pageToken.
+	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c", "gemini-x", "gemini-y"}
 	if got := c.Names(context.Background()); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
 	}
