@@ -371,7 +371,9 @@ function Row({ r, selected, arrived }: { r: RequestRow; selected: boolean; arriv
       <TableCell>
         <span className="inline-flex items-center gap-1.5">
           {r.protocol}
-          {r.operation === "count_tokens" && <Badge title="count_tokens">count</Badge>}
+          {r.operation !== "create" && (
+            <Badge title={r.operation}>{r.operation === "count_tokens" ? "count" : r.operation}</Badge>
+          )}
         </span>
       </TableCell>
       <TableCell className="font-medium">{r.client_model || <Dash />}</TableCell>

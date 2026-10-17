@@ -34,6 +34,7 @@ func TestMatchPath(t *testing.T) {
 	}{
 		{"POST", "/v1/chat/completions", Chat, Create, ""},
 		{"POST", "/v1/responses", Responses, Create, ""},
+		{"POST", "/v1/alpha/search", Responses, Search, ""},
 		{"POST", "/v1/messages", Anthropic, Create, ""},
 		{"POST", "/v1/messages/count_tokens", Anthropic, CountTokens, ""},
 		{"POST", "/v1beta/models/gemini-3.1-pro:generateContent", Gemini, Create, "gemini-3.1-pro"},
@@ -47,6 +48,8 @@ func TestMatchPath(t *testing.T) {
 		{"POST", "/v1/responses/abc", "", "", ""},
 		{"GET", "/v1/responses/abc", "", "", ""},
 		{"POST", "/v1/responses/compact", "", "", ""},
+		{"GET", "/v1/alpha/search", "", "", ""},
+		{"POST", "/alpha/search", "", "", ""},
 		{"POST", "/v1/messages/", "", "", ""},
 		{"GET", "/v1/messages", "", "", ""},
 		{"POST", "/v1/messages/count_tokens/", "", "", ""},
@@ -83,6 +86,7 @@ func TestSuffix(t *testing.T) {
 	}{
 		{Chat, Create, "", "/chat/completions"},
 		{Responses, Create, "", "/responses"},
+		{Responses, Search, "", "/alpha/search"},
 		{Anthropic, Create, "", "/v1/messages"},
 		{Anthropic, CountTokens, "", "/v1/messages/count_tokens"},
 		{Gemini, Create, "gemini-3.1-pro", "/v1beta/models/gemini-3.1-pro:generateContent"},

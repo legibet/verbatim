@@ -1036,6 +1036,81 @@ breaker:
 	}
 }
 
+// Codex's standalone web search reaches the session's pinned upstream through
+// its body id, which carries the value Codex sends as session-id.
+func TestSearchFollowsSessionPin(t *testing.T) {
+	var aCreate, bSearch atomic.Int32
+	aCreate.Store(529)
+	bSearch.Store(200)
+	handler := func(create, search *atomic.Int32, name string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			status := create
+			if r.URL.Path == "/v1/alpha/search" {
+				status = search
+			}
+			reply(int(status.Load()), `{"output":"found","from":"`+name+`"}`)(w, r)
+		}
+	}
+	var ok atomic.Int32
+	ok.Store(200)
+	a := newUpstream(t, handler(&aCreate, &ok, "a"))
+	b := newUpstream(t, handler(&ok, &bSearch, "b"))
+	g := newGateway(t, "providers:\n"+prov("a", "responses", a.URL+"/v1")+prov("b", "responses", b.URL+"/v1")+`
+routes:
+  - model: gpt-*
+    targets: [{provider: a}, {provider: b, priority: 2}]
+affinity:
+  rules:
+    - match: {protocol: responses}
+      key: [{header: session-id}, {body: prompt_cache_key}, {body: id}]
+breaker:
+  failure_threshold: 1
+`)
+	create := func() result {
+		return g.post(t, "/v1/responses", `{"model":"gpt-x","input":"hi"}`, "Session-Id", "S")
+	}
+	search := func(id string) result {
+		return g.post(t, "/v1/alpha/search", `{"id":"`+id+`","model":"gpt-x","commands":{"search_query":[{"q":"go"}]}}`)
+	}
+
+	// A create that fails over pins the session to b.
+	if res := create(); gjson.Get(res.body, "from").Str != "b" {
+		t.Fatalf("create: %s", res.body)
+	}
+	g.h.breakers.Success("a")
+
+	res := search("S")
+	if gjson.Get(res.body, "from").Str != "b" || b.last().path != "/v1/alpha/search" || b.last().header.Get("Authorization") != "Bearer key-b" {
+		t.Fatalf("search did not follow the pin: %s, upstream saw %s", res.body, b.last().path)
+	}
+	row := g.row(t, res.rid)
+	if row.Protocol != "responses" || row.Operation != "search" || row.InputTokens != nil || row.CostUSD != nil ||
+		gjson.Get(row.RoutingJSON, "pin.state").Str != "hit" || gjson.Get(row.RoutingJSON, "pin.source").Str != "body:id" {
+		t.Errorf("search row: %s %s, routing %s", row.Protocol, row.Operation, row.RoutingJSON)
+	}
+
+	// An upstream without the endpoint fails over, without feeding its
+	// breaker or moving the session's pin.
+	bSearch.Store(500)
+	if res := search("S"); gjson.Get(res.body, "from").Str != "a" {
+		t.Fatalf("search did not fail over: %s", res.body)
+	}
+	if st := g.h.breakers.State("b"); st.State != "closed" || st.Failures != 0 {
+		t.Fatalf("search fed the breaker: %+v", st)
+	}
+	aCreate.Store(200)
+	if res := create(); gjson.Get(res.body, "from").Str != "b" {
+		t.Errorf("search moved the pin: create went to %s", gjson.Get(res.body, "from").Str)
+	}
+
+	// A search outside any pinned session creates no pin.
+	pins := g.h.pins.Len()
+	search("T")
+	if g.h.pins.Len() != pins {
+		t.Errorf("search created a pin")
+	}
+}
+
 func TestResponseOwnership(t *testing.T) {
 	var aStatus atomic.Int32
 	aStatus.Store(200)

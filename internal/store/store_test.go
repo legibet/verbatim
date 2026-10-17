@@ -231,12 +231,15 @@ func TestRequestsFilters(t *testing.T) {
 func TestUsage(t *testing.T) {
 	s := openTest(t, 16)
 	seed(t, s)
+	search := rowSpec{at: 3 * time.Hour, proto: "responses", op: "search", model: "kimi-k3", route: "kimi-k3", provider: "moonshot", status: 200, outcome: "completed", noUsage: true}
+	s.Record(search.request(len(fixture)))
+	flush(t, s, len(fixture)+1)
 
 	rows, total, err := s.Usage(UsageFilter{}, "model")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// count_tokens (req-1, input 999) is excluded everywhere.
+	// count_tokens (req-1, input 999) and search (req-6) are excluded everywhere.
 	want := Aggregate{Requests: 5, Errors: 3, Input: 160, Output: 16, CostUSD: 0.75, Unpriced: 1, NoUsage: 2}
 	if total != want {
 		t.Fatalf("total = %+v, want %+v", total, want)

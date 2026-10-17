@@ -15,11 +15,11 @@ The design document, `docs/design.md`, is the behavior contract.
 
 ## What it does
 
-- Entry points: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/messages` and `/v1/messages/count_tokens`; `GET /v1/models` assembled from the configuration and the providers' own lists.
+- Entry points: `POST /v1/chat/completions`, `POST /v1/responses` and Codex's web search `/v1/alpha/search`, `POST /v1/messages` and `/v1/messages/count_tokens`; `GET /v1/models` assembled from the configuration and the providers' own lists.
 - Routing: ordered routes with glob patterns; targets with priority tiers and weights, weighted or round-robin balancing; a tier is exhausted before the next one is tried.
 - Failover on connection failures and on 408/409/425/429/5xx/529 (and 401/403/404, with a warning), decided before anything is sent to the client. Everything else, including every 400, is returned unchanged.
 - Circuit breaker per provider, with a single half-open probe.
-- Session affinity: the session key comes from request fields you name in the configuration (Claude Code's `metadata.user_id`, Codex's `session_id` header, ...), with a prefix hash as fallback; the pin is reserved before the first attempt so parallel first requests of a session land together. Responses `previous_response_id` is routed to the upstream that produced the id.
+- Session affinity: the session key comes from request fields you name in the configuration (Claude Code's `metadata.user_id`, Codex's `session-id` header, ...), with a prefix hash as fallback; the pin is reserved before the first attempt so parallel first requests of a session land together. Responses `previous_response_id` is routed to the upstream that produced the id.
 - Per-provider static request overrides for relay quirks (delete a field, set a literal).
 - Request log in SQLite: how each request was routed, every attempt, tokens (input, cache read, cache write, output, reasoning) as the provider reported them, and a cost from configured list prices.
 - CLI for the log and usage; a web UI at `/ui/` for requests, request detail, usage, and live provider state.
@@ -53,6 +53,21 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 # Claude Code
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 ANTHROPIC_API_KEY=$VERBATIM_KEY claude
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+model_provider = "verbatim"
+
+[model_providers.verbatim]
+name = "verbatim"
+base_url = "http://127.0.0.1:8080/v1"
+env_key = "VERBATIM_KEY"
+wire_api = "responses"
+# Web search for models Codex runs without hosted tools (current GPT models)
+# goes to /alpha/search; it works when the routed upstream serves that path.
+supports_standalone_web_search = true
 ```
 
 The client's model name picks the route; the client's protocol picks which of the route's targets are eligible.

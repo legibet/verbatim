@@ -195,8 +195,9 @@ func (s *Store) RequestByRequestID(rid string) (*Request, error) {
 	return r, nil
 }
 
-// UsageFilter selects rows for usage aggregates. count_tokens rows are always
-// excluded. Zero values mean "no constraint".
+// UsageFilter selects rows for usage aggregates. Only create rows are
+// aggregated; count_tokens and search rows are not. Zero values mean "no
+// constraint".
 type UsageFilter struct {
 	Since, Until time.Time // Since inclusive, Until exclusive
 	Protocol     string
@@ -207,7 +208,7 @@ type UsageFilter struct {
 
 func (f UsageFilter) where() *where {
 	w := &where{}
-	w.add(`operation != 'count_tokens'`)
+	w.add(`operation = 'create'`)
 	if !f.Since.IsZero() {
 		w.add(`ts >= ?`, f.Since.UnixMilli())
 	}

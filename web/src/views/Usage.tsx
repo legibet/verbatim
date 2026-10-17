@@ -156,7 +156,7 @@ function Totals({ t }: { t: Aggregate }) {
         ))}
       </div>
       <p className="mt-2 text-muted-foreground">
-        <Coverage a={t} /> Cost covers priced requests only; count_tokens requests are excluded.
+        <Coverage a={t} /> Cost covers priced requests only; count_tokens and search requests are excluded.
       </p>
     </div>
   )

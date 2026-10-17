@@ -155,8 +155,9 @@ affinity:
   rules:
     - match: {protocol: anthropic}  # Claude Code sends metadata.user_id
       key: [{body: metadata.user_id}, {header: x-session-affinity}]
-    - match: {protocol: responses}  # Codex sends a session_id header and prompt_cache_key
-      key: [{header: session_id}, {body: prompt_cache_key}]
+    - match: {protocol: responses}  # Codex sends a session-id header and prompt_cache_key;
+                                    # its /alpha/search carries the same value as id
+      key: [{header: session-id}, {body: prompt_cache_key}, {body: id}]
     - match: {protocol: chat}
       key: [{header: x-session-affinity}, {body: prompt_cache_key}, {body: user}]
     # match may also name a model glob: {protocol: chat, model: "gpt-*"}

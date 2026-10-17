@@ -14,11 +14,15 @@ const (
 	Gemini    ID = "gemini"
 )
 
+// Operation is what a request asks of the upstream. Only create is priced,
+// creates or moves pins, and feeds the breaker; the others follow a pin and
+// are left out of usage aggregates (design 4).
 type Operation string
 
 const (
 	Create      Operation = "create"
 	CountTokens Operation = "count_tokens"
+	Search      Operation = "search" // Codex's standalone web search, /alpha/search
 )
 
 type AuthScheme string

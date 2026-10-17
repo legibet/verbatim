@@ -252,8 +252,8 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 		return order, true
 	}
 	x.pin.key = affinity.PinKey{Protocol: x.proto.ID(), Key: key, Model: model}
-	if x.op == protocol.CountTokens {
-		// count_tokens follows a pin but never creates one (design 7.3).
+	if x.op != protocol.Create {
+		// count_tokens and search follow a pin but never create one (design 7.3).
 		x.pin.target, x.pin.has = h.pins.Get(x.pin.key)
 	} else {
 		// Reserving before the first attempt makes concurrent first requests
@@ -348,10 +348,10 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		if !failover(resp.StatusCode) {
 			a.MS = time.Since(sent).Milliseconds()
 			x.attempts = append(x.attempts, a)
-			if x.op == protocol.CountTokens {
-				x.verdict(c.Provider, probe, false)
-			} else {
+			if x.op == protocol.Create {
 				h.breakers.Success(c.Provider)
+			} else {
+				x.verdict(c.Provider, probe, false)
 			}
 			x.commitPin(c.TargetID)
 			x.commit(resp, c)
@@ -408,10 +408,11 @@ func counted(status int) bool {
 }
 
 // verdict reports a failed or verdict-less attempt to the breaker.
-// count_tokens never feeds it; a probe that ends without a counted failure
-// is abandoned so the next request can probe.
+// Only create feeds it: a healthy provider may well lack count_tokens or
+// search. A probe that ends without a counted failure is abandoned so the
+// next request can probe.
 func (x *exchange) verdict(provider string, probe, failure bool) {
-	if failure && x.op != protocol.CountTokens {
+	if failure && x.op == protocol.Create {
 		x.h.breakers.Failure(provider, probe)
 	} else if probe {
 		x.h.breakers.Abandon(provider)

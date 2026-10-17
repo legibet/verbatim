@@ -85,7 +85,7 @@ affinity:
     - match: {protocol: anthropic}
       key: [{body: metadata.user_id}, {header: x-session-affinity}]
     - match: {protocol: responses}
-      key: [{header: session_id}, {body: prompt_cache_key}]
+      key: [{header: session-id}, {body: prompt_cache_key}, {body: id}]
     - match: {protocol: chat}
       key: [{header: x-session-affinity}, {body: prompt_cache_key}, {body: user}]
   fallback: prefix_hash

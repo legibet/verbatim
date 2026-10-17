@@ -6,19 +6,31 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// responsesProtocol is the OpenAI Responses API (creating a response only).
+// responsesProtocol is the OpenAI Responses API: creating a response, and
+// the standalone web search Codex calls for models that get no hosted tools.
 type responsesProtocol struct{ bodyModel }
 
 func (responsesProtocol) ID() ID { return Responses }
 
 func (responsesProtocol) Match(method, path string) (Operation, string, bool) {
-	if method == http.MethodPost && path == "/v1/responses" {
+	if method != http.MethodPost {
+		return "", "", false
+	}
+	switch path {
+	case "/v1/responses":
 		return Create, "", true
+	case "/v1/alpha/search":
+		return Search, "", true
 	}
 	return "", "", false
 }
 
-func (responsesProtocol) Suffix(Operation, string) string { return "/responses" }
+func (responsesProtocol) Suffix(op Operation, _ string) string {
+	if op == Search {
+		return "/alpha/search"
+	}
+	return "/responses"
+}
 
 func (responsesProtocol) ModelsSuffix() string { return "/models" }
 

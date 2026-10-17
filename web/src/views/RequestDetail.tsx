@@ -290,7 +290,7 @@ function RoutingView({ r, routing, attempts }: { r: RequestRow; routing: Routing
 const usd = (n: number) => `$${n.toFixed(6)}`
 
 function CostView({ r, prices }: { r: RequestRow; prices: Prices | null }) {
-  if (r.operation === "count_tokens") return <Muted>count_tokens requests are not priced.</Muted>
+  if (r.operation !== "create") return <Muted>{r.operation} requests are not priced.</Muted>
   if (r.cost_usd === null || prices === null) {
     if (r.usage_json === null) return <Muted>No usage was recorded, so there is no cost.</Muted>
     if (r.input_tokens === null || r.output_tokens === null)

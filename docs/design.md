@@ -39,12 +39,15 @@ verbatim identifies the inbound protocol from the request path. It does not insp
 |---|---|---|---|
 | `chat` | `create` | `POST /v1/chat/completions` | body `model` |
 | `responses` | `create` | `POST /v1/responses` | body `model` |
+| `responses` | `search` | `POST /v1/alpha/search` | body `model` |
 | `anthropic` | `create` | `POST /v1/messages` | body `model` |
 | `anthropic` | `count_tokens` | `POST /v1/messages/count_tokens` | body `model` |
 | `gemini` | `create` | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent` | URL path |
 | `gemini` | `count_tokens` | `POST /v1beta/models/{model}:countTokens` | URL path |
 
-The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the provider's `base_url`. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
+`search` is Codex's standalone web search. Models that Codex runs without hosted tools search through a client-side `web.run` function, and Codex posts each call to `{base_url}/alpha/search` when the provider sets `supports_standalone_web_search`. It is a plain JSON request and response; the body carries the turn's `model` and the Codex session id as `id`, and the response reports no usage.
+
+The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the provider's `base_url`. Only `create` is priced, creates or moves pins, and feeds the breaker; `count_tokens` and `search` follow a pin, never feed the breaker, and are left out of usage aggregates. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
 
 ### 4.1 Client authentication
 
@@ -56,7 +59,7 @@ For a forwarded request, verbatim:
 
 1. Reads the full client body into memory. The body is needed for retries, for the model rewrite, and for the affinity key. Requests above `server.max_body_bytes` (default 32 MiB) are rejected with 413. `server.max_inflight` (default 64) bounds the number of concurrent requests and therefore total buffered memory; excess requests get 503 in native format.
 2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For `gemini` the model is in the URL and the body step is skipped. Deserializing the body into a struct is never done, so unknown fields survive.
-3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat` and `responses` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
+3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat` and `responses` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
 4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`, `x-goog-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's authentication header per its `auth` setting; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
 5. Sends the request and streams the response back.
 
@@ -188,7 +191,7 @@ affinity:
     - match: {protocol: anthropic}
       key: [{body: metadata.user_id}, {header: x-session-affinity}]
     - match: {protocol: responses}
-      key: [{header: session_id}, {body: prompt_cache_key}]
+      key: [{header: session-id}, {body: prompt_cache_key}, {body: id}]
     - match: {protocol: chat}
       key: [{header: x-session-affinity}, {body: prompt_cache_key}, {body: user}]
   fallback: prefix_hash
@@ -303,7 +306,7 @@ Which request field identifies a session is a property of the client, so it is c
 - `{body: <gjson path>}`: a string or number at that path in the request body, taken as sent.
 - `{header: <name>}`: a request header, case-insensitive.
 
-verbatim ships no built-in rules. The example configuration carries the rules that match today's common clients, and they are ordinary configuration the user can change: Claude Code sends `metadata.user_id`; Codex sends a `session_id` header and `prompt_cache_key`; Pi and omp can send `x-session-affinity`; OpenAI SDK users often set `user` or `prompt_cache_key`. Where a client offers both a header and a body field, the header is listed first because it never participates in prompt caching or thinking-prefix checks. These values identify a client session, not necessarily one conversation; two conversations under one `user` share a pin, which costs nothing but balance.
+verbatim ships no built-in rules. The example configuration carries the rules that match today's common clients, and they are ordinary configuration the user can change: Claude Code sends `metadata.user_id`; Codex sends a `session-id` header and `prompt_cache_key` with the same value, and its `/alpha/search` carries that value as `id`, so one rule keeps a search on the session's upstream; Pi and omp can send `x-session-affinity`; OpenAI SDK users often set `user` or `prompt_cache_key`. Where a client offers both a header and a body field, the header is listed first because it never participates in prompt caching or thinking-prefix checks. These values identify a client session, not necessarily one conversation; two conversations under one `user` share a pin, which costs nothing but balance.
 
 If no rule matches or no source yields a value, `affinity.fallback` applies:
 
@@ -323,7 +326,7 @@ Pins live in an in-process map with LRU eviction and `affinity.ttl` expiry, refr
 - `prefer` (default): if the pinned target is skipped (open breaker) or fails, selection continues with the remaining candidates and the pin moves to whichever target gets committed. `affinity_moved` is set on the log row. The client may receive a signature or state error from the new target on this very request, and verbatim does not hide it.
 - `strict`: if the pinned target is skipped or fails, verbatim returns that failure (the upstream response unchanged, or 502 native if there was none) and tries nothing else. An expired or evicted pin makes the session new, and `strict` then behaves like a first request.
 
-`count_tokens` follows an existing pin and never creates or moves one.
+`count_tokens` and `search` follow an existing pin and never create or move one. A search that fails over does not take the conversation away from the upstream holding its prompt cache.
 
 ### 7.4 Response ownership (Responses)
 
@@ -350,11 +353,11 @@ The body of an abandoned attempt is read (bounded by `server.idle_timeout` and 1
 
 - Anything after status and headers have been committed to the client.
 - Error objects inside a `200` streamed body. They are forwarded, and recorded as outcome `upstream_error_event` (section 11.2), but they do not touch the breaker in version 1.
-- Any `count_tokens` failure affecting the pin (section 7.3).
+- Any `count_tokens` or `search` failure affecting the pin (section 7.3).
 
 ### 8.3 Circuit breaker
 
-Per provider. Only signals that indicate the provider as a whole is unhealthy feed the breaker: no response headers, 5xx, 529, 429. A 401, 403, or 404 permits failover for this request but does not count, because it is as likely to be about one model, one key entitlement, or one operation (Ollama serves Messages but not `count_tokens`) as about the provider. `count_tokens` attempts never feed the breaker.
+Per provider. Only signals that indicate the provider as a whole is unhealthy feed the breaker: no response headers, 5xx, 529, 429. A 401, 403, or 404 permits failover for this request but does not count, because it is as likely to be about one model, one key entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`) as about the provider. `count_tokens` and `search` attempts never feed the breaker, whatever their status.
 
 `breaker.failure_threshold` consecutive counted failures open the breaker for `breaker.cooldown`. While open, the provider is skipped at dispatch (section 6.4 step 4). After the cooldown exactly one request is admitted (half-open, admission is atomic); a committed response closes the breaker, a counted failure reopens it for another cooldown. Any committed response resets the consecutive counter.
 
@@ -367,7 +370,7 @@ When every candidate has failed or been skipped:
 
 ## 9. Request overrides
 
-A provider may declare static edits applied to every `create` and `count_tokens` request it receives, as an ordered list of operations:
+A provider may declare static edits applied to every request it receives, whatever the operation, as an ordered list of operations:
 
 ```yaml
 overrides:
@@ -413,7 +416,7 @@ One SQLite database (`log.path`), WAL mode, tables `requests` and `owned_respons
 | `request_id` | text | verbatim-generated, also returned as `x-verbatim-request-id` |
 | `upstream_request_id` | text | `x-request-id` or `request-id` from the committed upstream response |
 | `protocol` | text | `chat`, `responses`, `anthropic`, `gemini` |
-| `operation` | text | `create` or `count_tokens` |
+| `operation` | text | `create`, `count_tokens`, or `search` |
 | `client_model` | text | model name as the client sent it |
 | `route` | text | matched route pattern |
 | `provider` | text | provider of the committed response, or of the last attempt |
@@ -440,7 +443,7 @@ One SQLite database (`log.path`), WAL mode, tables `requests` and `owned_respons
 | `price_json` | text | the unit prices used, so history stays stable when the price table changes |
 | `error` | text | up to `log.error_excerpt_bytes` of the final error body, or verbatim's own message |
 
-Request and response bodies are not stored. `count_tokens` rows carry `input_tokens` from the response and are excluded from usage aggregates and cost.
+Request and response bodies are not stored. `count_tokens` rows carry `input_tokens` from the response; `search` rows carry no usage. Both are excluded from usage aggregates and cost.
 
 ### 11.3 Usage extraction
 
@@ -586,7 +589,7 @@ Concurrency: one goroutine per request, standard library. The pin store, the bre
 
 In:
 
-- `chat`, `responses`, `anthropic` entry points, including `count_tokens`.
+- `chat`, `responses`, `anthropic` entry points, including `count_tokens` and Codex's `/v1/alpha/search`.
 - Providers with configurable auth and headers, routes, selection, failover, breaker, affinity with pin reservation, response ownership, overrides, as specified.
 - SQLite log with usage and cost; `serve`, `check`, `usage`, `log`, `pricing sync`, `pricing show`, `status`.
 - Model listing endpoints with provider discovery.
