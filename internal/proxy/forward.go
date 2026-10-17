@@ -223,7 +223,8 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 
 	// A continuation can only be served by the upstream that holds the
 	// referenced state. The owner is used as recorded, even when the route's
-	// targets have changed since; only its provider must still exist.
+	// targets have changed since; only its provider must still serve this
+	// protocol.
 	if id, ok := x.proto.ContinuationRef(body); ok {
 		provider, upstreamModel, found, err := h.store.Owner(id)
 		if err != nil {
@@ -235,9 +236,9 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 				fmt.Sprintf("response %q was not produced through this gateway, or its record has expired", id))
 			return nil, false
 		}
-		if p, ok := h.cfg.Providers[provider]; !ok || p.Type != string(x.proto.ID()) {
+		if _, ok := h.cfg.Providers[provider].Endpoints[string(x.proto.ID())]; !ok {
 			x.fail(http.StatusNotFound, "unknown_response_id",
-				fmt.Sprintf("response %q belongs to provider %q, which is no longer configured for %s", id, provider, x.proto.ID()))
+				fmt.Sprintf("response %q belongs to provider %q, which no longer has a %s endpoint", id, provider, x.proto.ID()))
 			return nil, false
 		}
 		owner := route.Candidate{TargetID: route.TargetID{Provider: provider, Model: upstreamModel}, Priority: 1, Weight: 1}
@@ -315,7 +316,8 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			last = nil
 			continue
 		}
-		admitted, probe := h.breakers.Admit(c.Provider)
+		endpoint := config.EndpointName(c.Provider, string(x.proto.ID()))
+		admitted, probe := h.breakers.Admit(endpoint)
 		if !admitted {
 			x.routing.SkippedOpen = append(x.routing.SkippedOpen, c.Provider)
 			failures = append(failures, c.Provider+": breaker open")
@@ -324,21 +326,21 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		x.setTarget(c.TargetID)
 		sent := time.Now()
 		a := attemptJSON{Provider: c.Provider, UpstreamModel: c.Model}
-		resp, err := h.transports[c.Provider].RoundTrip(req)
+		resp, err := h.transports[endpoint].RoundTrip(req)
 		if err != nil {
 			a.MS = time.Since(sent).Milliseconds()
 			if x.r.Context().Err() != nil {
 				// The client left; that says nothing about the provider.
 				a.Error = "client cancelled"
 				x.attempts = append(x.attempts, a)
-				x.verdict(c.Provider, probe, false)
+				x.verdict(endpoint, probe, false)
 				x.releasePin()
 				x.cancelled("client cancelled while waiting for " + c.Provider)
 				return
 			}
 			a.Error = err.Error()
 			x.attempts = append(x.attempts, a)
-			x.verdict(c.Provider, probe, true)
+			x.verdict(endpoint, probe, true)
 			h.log.Warn("upstream request failed", "provider", c.Provider, "url", req.URL.Redacted(),
 				"err", err, "request_id", x.row.RequestID)
 			failures = append(failures, c.Provider+": "+err.Error())
@@ -350,9 +352,9 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			a.MS = time.Since(sent).Milliseconds()
 			x.attempts = append(x.attempts, a)
 			if x.op.Auxiliary() {
-				x.verdict(c.Provider, probe, false)
+				x.verdict(endpoint, probe, false)
 			} else {
-				h.breakers.Success(c.Provider)
+				h.breakers.Success(endpoint)
 			}
 			x.commitPin(c.TargetID)
 			x.commit(resp, c)
@@ -363,7 +365,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		a.MS = time.Since(sent).Milliseconds()
 		a.Excerpt = excerpt(last.body, last.header, h.cfg.Log.ErrorExcerptBytes)
 		x.attempts = append(x.attempts, a)
-		x.verdict(c.Provider, probe, counted(resp.StatusCode))
+		x.verdict(endpoint, probe, counted(resp.StatusCode))
 		failures = append(failures, fmt.Sprintf("%s: HTTP %d", c.Provider, resp.StatusCode))
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
@@ -412,11 +414,11 @@ func counted(status int) bool {
 // Auxiliary operations never feed it: a healthy provider may well lack
 // count_tokens or search. A probe that ends without a counted failure is
 // abandoned so the next request can probe.
-func (x *exchange) verdict(provider string, probe, failure bool) {
+func (x *exchange) verdict(endpoint string, probe, failure bool) {
 	if failure && !x.op.Auxiliary() {
-		x.h.breakers.Failure(provider, probe)
+		x.h.breakers.Failure(endpoint, probe)
 	} else if probe {
-		x.h.breakers.Abandon(provider)
+		x.h.breakers.Abandon(endpoint)
 	}
 }
 
@@ -449,6 +451,7 @@ func (x *exchange) releasePin() {
 // request (design 4.2): model name, overrides, URL, and headers.
 func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) {
 	p := x.h.cfg.Providers[c.Provider]
+	e := p.Endpoints[string(x.proto.ID())]
 	var err error
 	if c.Model != x.row.ClientModel {
 		if body, err = x.proto.SetModel(body, x.r.Header.Get("Content-Type"), c.Model); err != nil {
@@ -458,7 +461,7 @@ func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) 
 	if body, err = applyOverrides(body, p.Overrides); err != nil {
 		return nil, err
 	}
-	u := p.BaseURL + x.proto.Suffix(x.op, c.Model)
+	u := e.BaseURL + x.proto.Suffix(x.op, c.Model)
 	if q := stripKey(x.r.URL.RawQuery); q != "" {
 		u += "?" + q
 	}
@@ -468,7 +471,7 @@ func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) 
 	}
 	copyEndToEnd(req.Header, x.r.Header, "Host", "Content-Length", "Authorization", "X-Api-Key", "X-Goog-Api-Key")
 	x.proto.DefaultHeaders(req.Header)
-	models.Authorize(req.Header, p)
+	models.Authorize(req.Header, p, e)
 	if len(req.Header.Values("User-Agent")) == 0 {
 		// An empty value stops net/http from adding its own User-Agent.
 		req.Header["User-Agent"] = []string{""}

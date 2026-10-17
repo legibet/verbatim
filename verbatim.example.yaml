@@ -28,86 +28,95 @@ server:
                                     # take over a minute to first byte: raise if needed)
 
 # ---------------------------------------------------------------------------
-# providers: one upstream endpoint, speaking exactly one protocol.
+# providers: one upstream service each (a vendor's API, a relay), with one
+# key, one set of headers, and one list of overrides, serving each protocol
+# listed under `endpoints`.
 #
-# A relay that offers several protocols is several providers, usually sharing
-# a key. base_url is the base URL that protocol's official SDK takes, as the
-# provider documents it (what you would put in OPENAI_BASE_URL or
+# An endpoint's base_url is the base URL that protocol's official SDK takes,
+# as the provider documents it (what you would put in OPENAI_BASE_URL or
 # ANTHROPIC_BASE_URL). verbatim appends only the operation suffix:
 #   chat, responses: /chat/completions, /responses, /alpha/search, /models
 #                    (the OpenAI SDK base URL already ends in /v1)
 #   images:          /images/generations, /images/edits, /models
 #   anthropic:       /v1/messages, /v1/messages/count_tokens, /v1/models
+#
+# Circuit breakers and model lists are kept per endpoint: one protocol of a
+# service failing does not stop the others. A provider name cannot contain
+# ".": a target names one endpoint as "provider.protocol".
 # ---------------------------------------------------------------------------
 providers:
-  openai-responses:
-    type: responses                 # chat | responses | anthropic | images | gemini (gemini: not served yet)
-    base_url: https://api.openai.com/v1
+  openai:
     key: ${OPENAI_KEY}
-    # auth: bearer                  # default by type: chat/responses/images bearer,
+    endpoints:                      # keyed by protocol: chat | responses | anthropic |
+                                    # images | gemini (gemini: not served yet)
+      responses: {base_url: https://api.openai.com/v1}
+      chat: {base_url: https://api.openai.com/v1}
+      images:                       # OpenAI Images API: JSON or multipart (only the
+                                    # model field is ever rewritten)
+        base_url: https://api.openai.com/v1
+        header_timeout: 5m          # any endpoint; default server.header_timeout. A
+                                    # non-streamed image is answered once it is drawn.
+        # auth: bearer              # default by protocol: chat/responses/images bearer,
                                     # anthropic x-api-key, gemini x-goog-api-key.
                                     # "none" for a local server without a key.
-  openai-chat:
-    type: chat
-    base_url: https://api.openai.com/v1
-    key: ${OPENAI_KEY}
 
   anthropic:
-    type: anthropic
-    base_url: https://api.anthropic.com
     key: ${ANTHROPIC_KEY}
+    endpoints:
+      anthropic: {base_url: https://api.anthropic.com}
 
-  moonshot-anthropic:               # Moonshot's native Anthropic Messages endpoint
-    type: anthropic
-    base_url: https://api.moonshot.ai/anthropic
+  moonshot:
     key: ${MOONSHOT_KEY}
-  moonshot-chat:
-    type: chat
-    base_url: https://api.moonshot.ai/v1
-    key: ${MOONSHOT_KEY}
+    endpoints:
+      anthropic: {base_url: https://api.moonshot.ai/anthropic}   # native Messages
+      chat: {base_url: https://api.moonshot.ai/v1}
 
-  openrouter-anthropic:
-    type: anthropic
-    base_url: https://openrouter.ai/api
+  openrouter: &openrouter
     key: ${OPENROUTER_KEY}
-    auth: bearer                    # send the key as Authorization: Bearer instead of x-api-key
     headers:                        # applied after the client's headers, before auth
       http-referer: https://verbatim.local
       x-title: verbatim
+    endpoints:
+      chat: {base_url: https://openrouter.ai/api/v1}
+      anthropic: {base_url: https://openrouter.ai/api}
 
-  relay-chat:                       # a third-party relay with quirks
-    type: chat
-    base_url: https://relay.example/v1
-    key: ${RELAY_KEY}
-    headers:
-      openai-project: null          # null removes a client header the relay rejects
+  openrouter-oss:                   # the same service with other overrides is another
+    <<: *openrouter                 # provider; the YAML merge copies key, headers, endpoints
     overrides:                      # static edits to every request body sent here,
                                     # applied in order, each attempt from the original
                                     # client body. Paths are gjson/sjson paths.
+      - set: {path: provider.quantizations, value: [fp32, bf16, fp16, fp8, mxfp4]}
+
+  relay:                            # a third-party relay with quirks
+    key: ${RELAY_KEY}
+    headers:
+      openai-project: null          # null removes a client header the relay rejects
+    overrides:
       - delete: metadata            # the relay rejects unknown fields
       - delete: service_tier
       - set: {path: temperature, value: 1}
-      # Not allowed: "model" or "stream" anywhere; on anthropic providers also
+      # Not allowed: "model" or "stream" anywhere; with an anthropic endpoint also
       # anything under system/tools/messages (it would break preserved thinking);
-      # two overrides whose paths overlap.
+      # two overrides whose paths overlap; any override on a provider with an
+      # images endpoint (an image request may be multipart).
+    endpoints:
+      chat: {base_url: https://relay.example/v1}
+      responses: {base_url: https://relay.example/v1}
 
   local-llama:
-    type: chat
-    base_url: http://127.0.0.1:8081/v1
-    auth: none
-
-  openai-images:                    # OpenAI Images API: /v1/images/generations and
-    type: images                    # /v1/images/edits, JSON or multipart (only the
-    base_url: https://api.openai.com/v1   # model field is ever rewritten). No overrides.
-    key: ${OPENAI_KEY}
-    header_timeout: 5m              # any provider; default server.header_timeout. A
-                                    # non-streamed image is answered once it is drawn.
+    endpoints:
+      chat: {base_url: http://127.0.0.1:8081/v1, auth: none}
 
 # ---------------------------------------------------------------------------
 # routes: ordered. A request takes the first route whose `model` matches the
-# client's model name AND which has a target whose provider speaks the
-# request's protocol (a Chat Completions request can only go to a chat
-# provider, and so on; verbatim never converts formats).
+# client's model name AND which has a target serving the request's protocol
+# (a Chat Completions request can only go to a chat endpoint, and so on;
+# verbatim never converts formats).
+#
+# A target `provider: x` serves every protocol x has an endpoint for;
+# `provider: x.chat` serves chat only. A route listing whole providers takes
+# requests of all their protocols, so a route meant for one protocol of a
+# service names the endpoint.
 #
 # `model` is a glob: * matches any run of characters, including "/". Put exact
 # names first, patterns after, "*" last. Each route's pattern must be unique.
@@ -117,13 +126,12 @@ routes:
   # depends on the protocol the client speaks and on priority/weight.
   - model: kimi-k3
     targets:
-      - provider: moonshot-anthropic            # Anthropic clients (Claude Code) land here
-      - provider: moonshot-chat                 # Chat clients: 3 of 4 requests here...
-        weight: 3
-      - provider: relay-chat                    # ...and 1 of 4 here, as "kimi-k3-0905"
+      - provider: moonshot                      # Anthropic clients (Claude Code) and
+        weight: 3                               # chat clients: 3 of 4 chat requests here...
+      - provider: relay.chat                    # ...and 1 of 4 here, as "kimi-k3-0905"
         model: kimi-k3-0905                     # upstream model name (literal; default:
                                                 # the client's name unchanged)
-      - provider: openrouter-anthropic          # tried only when every priority-1
+      - provider: openrouter.anthropic          # tried only when every priority-1
         model: moonshotai/kimi-k3               # target failed or is circuit-open
         priority: 2
     # balance: weighted                         # default; or round_robin (weights ignored)
@@ -134,17 +142,19 @@ routes:
 
   - model: gpt-*
     targets:
-      - provider: openai-responses
-      - provider: openai-chat
-      - provider: openai-images                 # image requests for gpt-image-*
+      - provider: openai                        # responses, chat, and images (gpt-image-*)
+
+  - model: qwen/*                               # open-weight models on OpenRouter,
+    targets:                                    # with the quantization filter
+      - provider: openrouter-oss
 
   # Catch-all. discover: false keeps these providers' model lists out of
-  # GET /v1/models (pattern routes discover from their providers by default;
+  # GET /v1/models (pattern routes discover from their endpoints by default;
   # exact-name routes list their own name).
   - model: "*"
     discover: false
     targets:
-      - provider: openrouter-anthropic
+      - provider: openrouter.anthropic
       - provider: local-llama
 
 # ---------------------------------------------------------------------------
@@ -174,8 +184,8 @@ affinity:
                                     # user message, as sent. Or "none".
 
 # ---------------------------------------------------------------------------
-# breaker: per-provider circuit breaker. Only "the provider is unhealthy"
-# signals count: no response, 5xx, 529, 429. A 401/403/404 fails over this
+# breaker: one circuit breaker per provider endpoint. Only "the endpoint is
+# unhealthy" signals count: no response, 5xx, 529, 429. A 401/403/404 fails over this
 # request but does not count.
 # ---------------------------------------------------------------------------
 breaker:
@@ -183,7 +193,7 @@ breaker:
   cooldown: 30s                     # default; then one probe request is let through
 
 # ---------------------------------------------------------------------------
-# models: the provider model-list cache behind GET /v1/models.
+# models: the endpoints' model-list cache behind GET /v1/models.
 # ---------------------------------------------------------------------------
 models:
   cache_ttl: 10m                    # default

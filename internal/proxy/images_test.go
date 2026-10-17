@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -104,14 +105,14 @@ routes:
 	}
 }
 
-// A provider's header_timeout replaces server.header_timeout for it alone.
-func TestProviderHeaderTimeout(t *testing.T) {
+// An endpoint's header_timeout replaces server.header_timeout for it alone.
+func TestEndpointHeaderTimeout(t *testing.T) {
 	slow := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
 		reply(200, `{"from":"slow"}`)(w, r)
 	})
 	g := newGateway(t, "providers:\n"+
-		prov("impatient", "chat", slow.URL, "header_timeout: 50ms")+
+		fmt.Sprintf("  impatient:\n    key: k\n    endpoints:\n      chat: {base_url: %q, header_timeout: 50ms}\n", slow.URL)+
 		prov("patient", "chat", slow.URL)+`
 routes:
   - model: m

@@ -51,7 +51,7 @@ verbatim identifies the inbound protocol from the request path. It does not insp
 
 `images` is the OpenAI Images API. It is a protocol of its own, like `chat` and `responses`, because whether an upstream serves it is a fact about that upstream, independent of whether it serves chat or Responses at the same base URL. An image model is routed like any other model, by the body `model`; Codex's image tool, for example, sends `gpt-image-2` to `{base_url}/images/generations` and `/images/edits` as JSON. Edits from the OpenAI SDK are `multipart/form-data`, with the model in a form field. Both endpoints are synchronous: the image comes back in the response (as `b64_json`, often megabytes), or as server-sent events (`image_generation.partial_image`, `image_generation.completed`, and the `image_edit.*` equivalents) when the client sets `stream`. The response reports token usage, which section 12.3 prices.
 
-The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the provider's `base_url`. `count_tokens` and `search` are auxiliary operations: they serve the create requests of a session, follow a pin but never create or move one, never feed the breaker, and are neither priced nor aggregated as usage. Every other operation (`create`, `generate`, `edit`) is priced, creates and moves pins, and feeds the breaker. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
+The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the endpoint's `base_url`. `count_tokens` and `search` are auxiliary operations: they serve the create requests of a session, follow a pin but never create or move one, never feed the breaker, and are neither priced nor aggregated as usage. Every other operation (`create`, `generate`, `edit`) is priced, creates and moves pins, and feeds the breaker. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
 
 ### 4.1 Client authentication
 
@@ -63,8 +63,8 @@ For a forwarded request, verbatim:
 
 1. Reads the full client body into memory. The body is needed for retries, for the model rewrite, and for the affinity key. Requests above `server.max_body_bytes` (default 32 MiB) are rejected with 413. `server.max_inflight` (default 64) bounds the number of concurrent requests and therefore total buffered memory; excess requests get 503 in native format.
 2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For `gemini` the model is in the URL and the body step is skipped. For a `multipart/form-data` body (`images` edits) the bytes of the `model` field's value are replaced and no other byte changes; the form is never re-encoded, so file parts, field order, and part headers reach the provider as sent. Deserializing the body into a struct is never done, so unknown fields survive.
-3. Builds the upstream URL as `provider.base_url` + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat`, `responses`, and `images` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, `/images/generations`, `/images/edits`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
-4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`, `x-goog-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's authentication header per its `auth` setting; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
+3. Builds the upstream URL as the `base_url` of the provider's endpoint for this protocol + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat`, `responses`, and `images` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, `/images/generations`, `/images/edits`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
+4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`, `x-goog-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's key in the authentication header that the endpoint's `auth` names; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
 5. Sends the request and streams the response back.
 
 ### 4.3 Response forwarding
@@ -95,14 +95,14 @@ client request
   → authenticate client (401 if required and missing)
   → read body, extract model name
   → match route: first route whose pattern matches the model AND that has at least
-    one target whose provider speaks this protocol (404 native if none, section 6.3)
+    one target serving this protocol (404 native if none, section 6.3)
   → candidates = that route's targets filtered to this protocol
   → ownership: if the body carries previous_response_id (or conversation), look up
     the owning target; it is the only candidate (section 7.4)
   → affinity: look up or reserve a pin for this session (section 7)
   → build attempt order (section 6.4)
   → for each candidate:
-       if its provider's breaker is open at dispatch time: skip, record
+       if its endpoint's breaker is open at dispatch time: skip, record
        build attempt body and URL; send
        if no response headers (connect error, header timeout) or a failover-eligible
          status (section 8.1): record attempt, feed the breaker, move the pin, continue
@@ -132,30 +132,25 @@ server:
   idle_timeout: 120s                # upstream body inactivity, also used for error bodies
 
 providers:
-  openai-responses:
-    type: responses
-    base_url: https://api.openai.com/v1
+  openai:
     key: ${OPENAI_KEY}
-  openai-chat:
-    type: chat
-    base_url: https://api.openai.com/v1
-    key: ${OPENAI_KEY}
-  moonshot-anthropic:
-    type: anthropic
-    base_url: https://api.moonshot.ai/anthropic
+    endpoints:
+      responses: {base_url: https://api.openai.com/v1}
+      chat: {base_url: https://api.openai.com/v1}
+      images:
+        base_url: https://api.openai.com/v1
+        header_timeout: 5m           # a non-streamed image is answered once it is drawn
+  moonshot:
     key: ${MOONSHOT_KEY}
-  moonshot-chat:
-    type: chat
-    base_url: https://api.moonshot.ai/v1
-    key: ${MOONSHOT_KEY}
-  openrouter-anthropic:
-    type: anthropic
-    base_url: https://openrouter.ai/api
+    endpoints:
+      anthropic: {base_url: https://api.moonshot.ai/anthropic}
+      chat: {base_url: https://api.moonshot.ai/v1}
+  openrouter:
     key: ${OPENROUTER_KEY}
-    auth: bearer                     # send the key as Authorization: Bearer instead of x-api-key
-  relay-a-chat:
-    type: chat
-    base_url: https://relay.example/v1
+    endpoints:
+      chat: {base_url: https://openrouter.ai/api/v1}
+      anthropic: {base_url: https://openrouter.ai/api}
+  relay-a:
     key: ${RELAY_A_KEY}
     headers:
       x-title: verbatim
@@ -163,38 +158,31 @@ providers:
     overrides:
       - delete: metadata
       - set: {path: temperature, value: 1}
+    endpoints:
+      chat: {base_url: https://relay.example/v1}
   local-llama:
-    type: chat
-    base_url: http://127.0.0.1:8081/v1
-    auth: none
-  openai-images:
-    type: images
-    base_url: https://api.openai.com/v1
-    key: ${OPENAI_KEY}
-    header_timeout: 5m               # a non-streamed image is answered once it is drawn
+    endpoints:
+      chat: {base_url: http://127.0.0.1:8081/v1, auth: none}
 
 routes:
   - model: kimi-k3
     targets:
-      - provider: moonshot-anthropic
-      - provider: moonshot-chat
-        weight: 3
-      - provider: relay-a-chat
+      - provider: moonshot           # its anthropic and chat endpoints
+        weight: 3                    # for chat, 3 of 4 requests go here, 1 to relay-a
+      - provider: relay-a
         model: kimi-k3-0905
-        weight: 1
-      - provider: openrouter-anthropic
+      - provider: openrouter.anthropic   # only OpenRouter's Messages endpoint
         model: moonshotai/kimi-k3
         priority: 2
   - model: "gpt-*"
     targets:
-      - provider: openai-responses
-      - provider: openai-chat
-      - provider: openai-images       # serves gpt-image-* on /v1/images/*
+      - provider: openai             # responses, chat, and images (gpt-image-*)
   - model: "*"
     discover: false
     targets:
-      - provider: openrouter-anthropic
-      - provider: local-llama
+      - provider: openrouter
+      - provider: local-llama        # chat only, when OpenRouter's chat endpoint fails
+        priority: 2
 
 affinity:
   ttl: 1h
@@ -235,29 +223,36 @@ pricing:
 
 ### 6.2 `providers`
 
-A provider is one upstream endpoint speaking exactly one protocol. A relay that offers several protocols is written as several providers, one per protocol, usually sharing a key through the same environment variable.
+A provider is one upstream service, such as a vendor's API or a relay. It has one key, one set of headers, and one list of overrides, and serves each protocol listed under `endpoints`. A service that offers several protocols is one provider with several endpoints; a provider with one protocol has one endpoint. When two uses of one service need different overrides or keys, they are two providers.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `type` | yes | `chat`, `responses`, `anthropic`, `gemini`, or `images` |
+| `key` | unless every endpoint has `auth: none` | Provider API key |
+| `headers` | no | Map of header name to string (set) or `null` (remove), applied after client headers are copied and before the endpoint's `auth` |
+| `overrides` | no | Ordered list of static request edits applied to every request the provider receives, section 9; not allowed on a provider with an `images` endpoint |
+| `endpoints` | yes | Map from protocol (`chat`, `responses`, `anthropic`, `gemini`, `images`) to the endpoint fields below; at least one |
+
+Endpoint fields:
+
+| Field | Required | Meaning |
+|---|---|---|
 | `base_url` | yes | The base URL the protocol's official SDK takes; the operation's fixed suffix is appended (section 4.2) |
-| `key` | unless `auth: none` | Provider API key |
-| `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, `x-goog-api-key`, or `none`. Default by type: `chat`, `responses`, and `images` use `bearer`, `anthropic` uses `x-api-key`, `gemini` uses `x-goog-api-key`. |
-| `headers` | no | Map of header name to string (set) or `null` (remove), applied after client headers are copied and before `auth` |
-| `overrides` | no | Ordered list of static request edits, section 9; not allowed on `images` providers |
-| `header_timeout` | no | Wait for this provider's response headers; default `server.header_timeout`. Providers with the same value share one connection pool. |
+| `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, `x-goog-api-key`, or `none`. Default by protocol: `chat`, `responses`, and `images` use `bearer`, `anthropic` uses `x-api-key`, `gemini` uses `x-goog-api-key`. It belongs to the endpoint because the default differs by protocol: one setting for the whole provider would replace the default of every other protocol it serves. |
+| `header_timeout` | no | Wait for this endpoint's response headers; default `server.header_timeout`. A non-streamed image is answered only once it is drawn, so an `images` endpoint usually needs minutes, while a chat endpoint that long silent should fail over. Endpoints with the same value share one connection pool. |
+
+An endpoint is named `provider.protocol` (`openrouter.anthropic`), so a provider name cannot contain `.`. Circuit breakers (section 8.3), model lists (section 6.5), and the counters of the Providers view (section 14) are kept per endpoint: one protocol of a service failing, as a relay's image channel often does alone, does not stop the others. The request log records the provider, and its `protocol` column tells the endpoint.
 
 ### 6.3 `routes`
 
-An ordered list. A request matches the first route whose `model` pattern matches the client's model name **and** which has at least one target whose provider speaks the inbound protocol. A route that matches the name but has no target for the protocol is skipped, so a later route can still serve the request. If no route qualifies, verbatim returns 404 in native format with code `no_route`.
+An ordered list. A request matches the first route whose `model` pattern matches the client's model name **and** which has at least one target serving the inbound protocol. A route that matches the name but has no target for the protocol is skipped, so a later route can still serve the request. If no route qualifies, verbatim returns 404 in native format with code `no_route`.
 
 Patterns are globs with `*` as the only wildcard, matched case-sensitively against the whole name; `*` matches any run of characters including `/`, so `anthropic/*` works for OpenRouter-style names (the standard library's `path.Match` stops at `/` and is not used). Put exact names first, patterns after, and `"*"` last if a catch-all is wanted. A route's `model` pattern is its identity and must be unique in the list.
 
-Each route has a flat `targets` list. A target's protocol is the protocol of its provider; the route itself is protocol-agnostic. A target is identified by the pair (provider, upstream model name).
+Each route has a flat `targets` list; the route itself is protocol-agnostic. A target names a provider, and serves every protocol that provider has an endpoint for, or names one endpoint as `provider.protocol` and serves that protocol only. Naming the endpoint is how a route uses part of a service: a `gpt-*` route that should reach a relay only through Responses names `relay.responses`, and an earlier route listing a whole provider can take requests of protocols a later route was meant to serve. Within a protocol, a target is identified by the pair (provider, upstream model name); two targets of one route that send the same model to the same endpoint are a configuration error.
 
 | Target field | Default | Meaning |
 |---|---|---|
-| `provider` | required | Provider name |
+| `provider` | required | Provider name, or `provider.protocol` for one of its endpoints |
 | `model` | client's model name | Upstream model name. Literal only. If absent, the client's name is forwarded unchanged. |
 | `priority` | 1 | Lower number is tried first |
 | `weight` | 1 | Relative share within a priority tier |
@@ -269,7 +264,7 @@ Route-level fields:
 | `model` | required | Glob pattern and route identity |
 | `targets` | required | At least one |
 | `balance` | `weighted` | `weighted` (random by weight within a tier) or `round_robin` (rotate within a tier, weights ignored) |
-| `discover` | `true` | For pattern routes: populate the listing endpoints from the providers' own model lists, section 6.5. Ignored on exact-name routes. |
+| `discover` | `true` | For pattern routes: populate the listing endpoints from the provider endpoints' own model lists, section 6.5. Ignored on exact-name routes. |
 
 There is no provider-level model name mapping and no template substitution in `model`. If a relay prefixes every model name, each target states its full upstream name.
 
@@ -280,7 +275,7 @@ Given the candidates (the matched route's targets filtered to the inbound protoc
 1. If ownership (section 7.4) names a target, the order is that single target.
 2. Otherwise, group by `priority`, ascending. Within each tier, order by `balance`: `weighted` draws without replacement with probability proportional to `weight`; `round_robin` rotates from a counter kept per (route, protocol, tier). Concatenate the tiers.
 3. If affinity (section 7) yields a pinned target that is among the candidates, move it to the front.
-4. Attempt the list in order. The breaker is checked at dispatch time for each attempt, not when the list is built; a provider whose breaker is open is skipped and recorded in `routing_json`. If every candidate is skipped, the request fails immediately with 502 `all_upstreams_open`; there is no bypass, because the half-open probe (section 8.3) is what gives a recovering provider its chance.
+4. Attempt the list in order. The breaker is checked at dispatch time for each attempt, not when the list is built; a target whose endpoint's breaker is open is skipped and recorded in `routing_json`. If every candidate is skipped, the request fails immediately with 502 `all_upstreams_open`; there is no bypass, because the half-open probe (section 8.3) is what gives a recovering provider its chance.
 
 Each target is attempted at most once per request. A tier is exhausted before the next tier is touched. This differs from new-api, which steps down one priority tier per retry and ends up retrying the last tier repeatedly.
 
@@ -289,12 +284,12 @@ Each target is attempted at most once per request. A tier is exhausted before th
 Many clients populate their model picker from `/v1/models`, so the list has to be real. It is assembled per route, in configuration order:
 
 - An exact-name route contributes its own `model`. Providers are not consulted.
-- A pattern route with `discover: true` (the default) contributes the provider-listed model ids, over its targets, that match the pattern. Targets that carry a `model` rewrite are skipped, because the names a provider lists are its upstream names and would not match what the client must send. Each discovered name is then resolved through the routing rules of section 6.3 for that target's protocol, and is kept only if routing would send it to this route; otherwise an earlier route owns the name and the entry is dropped.
+- A pattern route with `discover: true` (the default) contributes the model ids listed by its targets' endpoints that match the pattern. Targets that carry a `model` rewrite are skipped, because the names a provider lists are its upstream names and would not match what the client must send. Each discovered name is then resolved through the routing rules of section 6.3 for that endpoint's protocol, and is kept only if routing would send it to this route; otherwise an earlier route owns the name and the entry is dropped.
 - A pattern route with `discover: false` contributes nothing.
 
 Names are deduplicated; the first occurrence wins. The response lists names only; it does not promise that every listed name works for every protocol.
 
-Provider lists come from `GET {base_url}` + the protocol's model-list suffix (section 4.2) for every protocol type (for `gemini`, ids are returned with the `models/` prefix stripped). Anthropic-style paginated lists are followed through `has_more` up to 10 pages. Lists are cached per provider for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the startup round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup does not get an empty list.
+Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2) (for `gemini`, ids are returned with the `models/` prefix stripped). Anthropic-style paginated lists are followed through `has_more` up to 10 pages. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the startup round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup does not get an empty list.
 
 Response shape: one entry per name carrying the union of what OpenAI and Anthropic clients read, so either parser is satisfied and ignores the rest:
 
@@ -353,7 +348,7 @@ This is state, and it is the one place verbatim keeps state beyond a cache. It i
 
 Before anything is committed to the client, the following end the current attempt and move to the next candidate:
 
-- No response headers: connection, TLS, or DNS failure; the provider's `header_timeout` elapsed.
+- No response headers: connection, TLS, or DNS failure; the endpoint's `header_timeout` elapsed.
 - Upstream status 408, 409, 425, 429, 500, 502, 503, 504, 529.
 - Upstream status 401 or 403: the provider key is invalid, exhausted, or not entitled to this model. Logged at warning level because it needs an operator.
 - Upstream status 404: the provider does not serve this model or operation. Logged at warning level.
@@ -370,20 +365,20 @@ The body of an abandoned attempt is read (bounded by `server.idle_timeout` and 1
 
 ### 8.3 Circuit breaker
 
-Per provider. Only signals that indicate the provider as a whole is unhealthy feed the breaker: no response headers, 5xx, 529, 429. A 401, 403, or 404 permits failover for this request but does not count, because it is as likely to be about one model, one key entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`) as about the provider. `count_tokens` and `search` attempts never feed the breaker, whatever their status.
+Per provider endpoint (section 6.2). Only signals that indicate the endpoint as a whole is unhealthy feed the breaker: no response headers, 5xx, 529, 429. A 401, 403, or 404 permits failover for this request but does not count, because it is as likely to be about one model, one key entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`) as about the endpoint. `count_tokens` and `search` attempts never feed the breaker, whatever their status.
 
-`breaker.failure_threshold` consecutive counted failures open the breaker for `breaker.cooldown`. While open, the provider is skipped at dispatch (section 6.4 step 4). After the cooldown exactly one request is admitted (half-open, admission is atomic); a committed response closes the breaker, a counted failure reopens it for another cooldown. Any committed response resets the consecutive counter.
+`breaker.failure_threshold` consecutive counted failures open the breaker for `breaker.cooldown`. While open, the endpoint is skipped at dispatch (section 6.4 step 4). After the cooldown exactly one request is admitted (half-open, admission is atomic); a committed response closes the breaker, a counted failure reopens it for another cooldown. Any committed response resets the consecutive counter.
 
 ### 8.4 Exhaustion
 
 When every candidate has failed or been skipped:
 
 - If the last attempt received an upstream response, that response is returned to the client **unchanged** (status, headers, body), consistent with principle 2. verbatim adds one header, `x-verbatim-attempts: <n>`, and the log row explains the sequence. A route with a single provider that returns 401 therefore shows the client a 401 with the provider's own message, not a synthetic 502.
-- If no attempt received a response (all connection failures or timeouts, or every provider open), verbatim responds 502 in the inbound protocol's native error format (section 10) with a message listing each attempt as `provider: error`.
+- If no attempt received a response (all connection failures or timeouts, or every endpoint open), verbatim responds 502 in the inbound protocol's native error format (section 10) with a message listing each attempt as `provider: error`.
 
 ## 9. Request overrides
 
-A provider may declare static edits applied to every request it receives, whatever the operation, as an ordered list of operations:
+A provider may declare static edits applied to every request it receives, whatever the protocol or operation, as an ordered list of operations:
 
 ```yaml
 overrides:
@@ -397,11 +392,11 @@ Paths are gjson/sjson paths into the request body. Operations run in the listed 
 The validator rejects:
 
 - `model` and `stream` at any depth of a `set` or `delete`, because they drive routing and the usage parser.
-- Any path under `system`, `tools`, or `messages` on providers of type `anthropic`, because editing them would change the preserved-thinking prefix. Overrides elsewhere in the body are static and therefore identical on every turn.
+- Any path under `system`, `tools`, or `messages` on a provider with an `anthropic` endpoint, because editing them would change the preserved-thinking prefix. Overrides elsewhere in the body are static and therefore identical on every turn.
 - Two operations whose paths overlap (one is a prefix of the other), to keep the result independent of ordering mistakes.
-- Any override on a provider of type `images`: an image request may be a multipart form, which these JSON edits cannot address, and an override that applies to some requests of a provider and not others would be hidden behavior.
+- Any override on a provider with an `images` endpoint: an image request may be a multipart form, which these JSON edits cannot address, and an override that applies to some requests of a provider and not others would be hidden behavior. Such a provider's image endpoint goes in a provider of its own.
 
-Overrides exist for relay quirks (a relay that rejects an unknown field, or demands a fixed parameter). They are not a conversion mechanism. Note that an override cannot be conditional on the request, so an edit that is only valid for streaming requests (such as `stream_options`) cannot be expressed; that is deliberate.
+Overrides exist for service quirks (a relay that rejects an unknown field, or demands a fixed parameter, or OpenRouter's `provider.quantizations`). They are not a conversion mechanism. Note that an override cannot be conditional on the request, so an edit that is only valid for streaming requests (such as `stream_options`) cannot be expressed; that is deliberate.
 
 ## 10. Errors produced by verbatim
 
@@ -562,9 +557,9 @@ Views:
 1. **Requests.** One row per request: time, protocol and operation, client model and the provider / upstream model it went to, status and outcome, stream flag, time to first byte and total time, token columns (input, cache read, cache write, output, reasoning), cost, attempt count, and pin state. Filters: time range, protocol, provider, route, status class, outcome, model substring, errors only. A live mode appends new rows by polling.
 2. **Request detail.** Opened from a row. Shows the routing explanation from `routing_json` (matched route, candidates, computed order, ownership, pin state, breaker skips), the attempt timeline from `attempt_log` (provider, status or error, duration, error excerpt for each attempt), the raw usage object, and the cost breakdown: each token column multiplied by the unit price stored in `price_json`, with the total and the `price_key`.
 3. **Usage.** Totals for the selected range and a breakdown by model, provider, route, or day, with a daily chart of cost and tokens. Every aggregate states how many requests in it had no price and how many had no usage, and lists the unpriced model names.
-4. **Providers.** Live state per provider: breaker closed, open until when, or half-open; consecutive counted failures; committed, failover, and `upstream_error_event` counts over the last hour; active pins; age of the cached model list; log rows dropped.
+4. **Providers.** Live state per provider endpoint: breaker closed, open until when, or half-open; consecutive counted failures; committed, failover, and `upstream_error_event` counts over the last hour; active pins; age of the cached model list; log rows dropped.
 
-JSON API, all `GET`: `/ui/api/requests` (filters and cursor pagination), `/ui/api/requests/{id}`, `/ui/api/usage`, `/ui/api/providers`, `/ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in `base_url` redacted).
+JSON API, all `GET`: `/ui/api/requests` (filters and cursor pagination), `/ui/api/requests/{id}`, `/ui/api/usage`, `/ui/api/providers`, `/ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in an endpoint's `base_url` redacted).
 
 ## 15. Implementation
 
@@ -575,7 +570,7 @@ Language: Go (1.27, the current release). Dependencies, kept deliberately short:
 Forwarding is built on `net/http/httputil.ReverseProxy`, which already handles hop-by-hop headers, headers named by `Connection`, trailers, `FlushInterval: -1` streaming, and client-cancellation propagation. The parts verbatim owns:
 
 - **`Rewrite`**: protocol detection, body read and model extraction have already happened in the handler; `Rewrite` only sets the outbound URL, headers, and body for the first attempt.
-- **`Transport`**: a `http.RoundTripper` that implements the attempt loop of section 5. For each candidate it builds the attempt body and URL, sends through the provider's `http.Transport` (one per distinct `header_timeout`), and either returns the response (committing it) or records the failure and continues. Because the loop lives in the round tripper, `ReverseProxy` never sees a failed attempt, and only the committed response is written to the client. The shared transport has `DisableCompression: true`, `ResponseHeaderTimeout` from the provider's `header_timeout`, and no redirect following (round trippers do not follow redirects; a 3xx is forwarded as is). Go's transport retries a request on a dead connection only when the request is idempotent or carries an `Idempotency-Key` header; verbatim neither adds nor strips that header, so retry semantics are exactly what the client asked for.
+- **`Transport`**: a `http.RoundTripper` that implements the attempt loop of section 5. For each candidate it builds the attempt body and URL, sends through the endpoint's `http.Transport` (one per distinct `header_timeout`), and either returns the response (committing it) or records the failure and continues. Because the loop lives in the round tripper, `ReverseProxy` never sees a failed attempt, and only the committed response is written to the client. The shared transport has `DisableCompression: true`, `ResponseHeaderTimeout` from the provider's `header_timeout`, and no redirect following (round trippers do not follow redirects; a 3xx is forwarded as is). Go's transport retries a request on a dead connection only when the request is idempotent or carries an `Idempotency-Key` header; verbatim neither adds nor strips that header, so retry semantics are exactly what the client asked for.
 - **`ModifyResponse`**: wraps the body in the usage tee and adds `x-verbatim-request-id` and, on exhaustion, `x-verbatim-attempts`.
 - **`ErrorHandler`**: produces the native-format 502 when the round tripper returns an error (no upstream response at all).
 - **Idle timeout**: a body-inactivity timer around the upstream body, reset on every read; on expiry the upstream body is closed and the client connection aborted, recorded as outcome `truncated`.

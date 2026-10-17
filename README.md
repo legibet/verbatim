@@ -18,9 +18,9 @@ The design document, `docs/design.md`, is the behavior contract.
 - Entry points: `POST /v1/chat/completions`, `POST /v1/responses` and Codex's web search `/v1/alpha/search`, `POST /v1/messages` and `/v1/messages/count_tokens`, `POST /v1/images/generations` and `/v1/images/edits` (JSON or multipart); `GET /v1/models` assembled from the configuration and the providers' own lists.
 - Routing: ordered routes with glob patterns; targets with priority tiers and weights, weighted or round-robin balancing; a tier is exhausted before the next one is tried.
 - Failover on connection failures and on 408/409/425/429/5xx/529 (and 401/403/404, with a warning), decided before anything is sent to the client. Everything else, including every 400, is returned unchanged.
-- Circuit breaker per provider, with a single half-open probe.
+- Circuit breaker per provider endpoint, with a single half-open probe.
 - Session affinity: the session key comes from request fields you name in the configuration (Claude Code's `metadata.user_id`, Codex's `session-id` header, ...), with a prefix hash as fallback; the pin is reserved before the first attempt so parallel first requests of a session land together. Responses `previous_response_id` is routed to the upstream that produced the id.
-- Per-provider static request overrides for relay quirks (delete a field, set a literal).
+- Per-provider static request overrides for service quirks (delete a field, set a literal).
 - Request log in SQLite: how each request was routed, every attempt, tokens (input, cache read, cache write, output, reasoning, image) as the provider reported them, and a cost from configured list prices.
 - CLI for the log and usage; a web UI at `/ui/` for requests, request detail, usage, and live provider state.
 
@@ -71,7 +71,7 @@ supports_standalone_web_search = true
 # Codex offers its image tool (POST /images/generations and /images/edits with
 # model gpt-image-2) to a custom provider only when this header is set; any
 # non-empty value does, and it is forwarded upstream like any client header.
-# Route gpt-image-2 to an images provider.
+# Route gpt-image-2 to a provider with an images endpoint.
 http_headers = { "x-openai-actor-authorization" = "verbatim" }
 
 # Remote compaction: Codex sends a compaction_trigger item on /responses and
@@ -83,7 +83,7 @@ http_headers = { "x-openai-actor-authorization" = "verbatim" }
 remote_compaction = "v2"
 ```
 
-The client's model name picks the route; the client's protocol picks which of the route's targets are eligible.
+The client's model name picks the route; the client's protocol picks which of the route's targets are eligible: a target serves every protocol its provider has an endpoint for, or the one endpoint it names as `provider.protocol`.
 
 ## Configuration
 
@@ -92,8 +92,8 @@ See `verbatim.example.yaml`. The sections:
 | Section | What it configures |
 |---|---|
 | `server` | Listen address, client API key, body and concurrency limits, upstream timeouts |
-| `providers` | One upstream endpoint per entry: `type`, `base_url`, `key`, optional `auth`, `headers`, `overrides` |
-| `routes` | Ordered list of `model` glob → `targets` (`provider`, optional upstream `model`, `priority`, `weight`) |
+| `providers` | One upstream service per entry: `key`, optional `headers` and `overrides`, and `endpoints`, a map from protocol to `base_url`, optional `auth` and `header_timeout` |
+| `routes` | Ordered list of `model` glob → `targets` (`provider` or `provider.protocol`, optional upstream `model`, `priority`, `weight`) |
 | `affinity` | Session key rules per protocol, fallback, TTL, `prefer` or `strict` mode |
 | `breaker` | Failure threshold and cooldown |
 | `models` | Model-list cache TTL and fetch timeout |
@@ -112,7 +112,7 @@ verbatim log     [--tail] [--since 1h] [--status 5xx] [--provider p] [--errors] 
 verbatim log     <request_id>            one request in full: routing, attempts, usage, price
 verbatim pricing sync                    download pricing.sources into pricing.cache
 verbatim pricing show <model>            the price entry for a client model name
-verbatim status                          live provider state from the running server
+verbatim status                          live endpoint state from the running server
 ```
 
 `usage` and `log` read the SQLite file directly and work while the server runs. The read-only commands do not need the provider keys in the environment.

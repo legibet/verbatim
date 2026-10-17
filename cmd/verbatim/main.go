@@ -30,7 +30,7 @@ Usage:
   verbatim log     <request_id>            one request in full
   verbatim pricing sync                    download pricing.sources into pricing.cache
   verbatim pricing show <model>            the price entry for a client model name
-  verbatim status                          live provider state from the running server
+  verbatim status                          live endpoint state from the running server
 
 ` + configHelp + `
 Run 'verbatim <command> -h' for a command's flags.

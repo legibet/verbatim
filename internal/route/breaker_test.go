@@ -34,7 +34,7 @@ func TestBreakerOpensAtThreshold(t *testing.T) {
 		t.Fatal("admitted while open")
 	}
 	if !admit(b, "other") {
-		t.Fatal("breakers are not per provider")
+		t.Fatal("breakers are not per endpoint")
 	}
 }
 

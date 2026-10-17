@@ -1,5 +1,5 @@
-// Package models keeps the providers' own model lists and assembles the
-// model listing served at /v1/models and /v1beta/models (design 6.5).
+// Package models keeps the provider endpoints' own model lists and assembles
+// the model listing served at /v1/models and /v1beta/models (design 6.5).
 package models
 
 import (
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,16 +23,16 @@ import (
 const (
 	// maxPages bounds Anthropic-style pagination (design 6.5).
 	maxPages = 10
-	// maxListBytes bounds one page of a provider's model list.
+	// maxListBytes bounds one page of an endpoint's model list.
 	maxListBytes = 16 << 20
 	// retryInterval is how soon a failed fetch is retried, when the TTL is
-	// longer; a provider unreachable at startup should not stay unlisted for
+	// longer; an endpoint unreachable at startup should not stay unlisted for
 	// a whole TTL.
 	retryInterval = time.Minute
 )
 
-// Cache holds the model list of every provider that discovery reads and
-// refreshes each one in the background. Readers wait only for the first
+// Cache holds the model list of every provider endpoint that discovery reads
+// and refreshes each one in the background. Readers wait only for the first
 // round of fetches after Start, never on a refresh.
 type Cache struct {
 	cfg       *config.Config
@@ -39,33 +40,41 @@ type Cache struct {
 	transport http.RoundTripper
 	ttl       time.Duration
 	timeout   time.Duration
-	providers []string // providers discovery reads, sorted
+	endpoints []endpoint // endpoints discovery reads, sorted
 
 	mu    sync.Mutex
-	lists map[string]list
-	warm  chan struct{} // closed when Start's first round of fetches has ended
+	lists map[string]list // by config.EndpointName
+	warm  chan struct{}   // closed when Start's first round of fetches has ended
 }
+
+type endpoint struct{ provider, proto string }
+
+func (e endpoint) name() string { return config.EndpointName(e.provider, e.proto) }
 
 type list struct {
 	ids     []string
 	fetched time.Time
 }
 
-// New returns a cache for cfg. Only providers that a discovering pattern
+// New returns a cache for cfg. Only endpoints that a discovering pattern
 // route uses without a model rewrite are ever fetched: no other list can
 // contribute to the listing. A nil transport means http.DefaultTransport.
 func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Duration) *Cache {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	need := map[string]bool{}
+	need := map[endpoint]bool{}
 	for _, r := range cfg.Routes {
 		if !discovers(r) {
 			continue
 		}
 		for _, t := range r.Targets {
-			if t.Model == "" {
-				need[t.Provider] = true
+			if t.Model != "" {
+				continue
+			}
+			provider, _ := t.Split()
+			for _, proto := range cfg.Protocols(t) {
+				need[endpoint{provider, proto}] = true
 			}
 		}
 	}
@@ -75,7 +84,7 @@ func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Dura
 		transport: transport,
 		ttl:       ttl,
 		timeout:   timeout,
-		providers: slices.Sorted(maps.Keys(need)),
+		endpoints: slices.SortedFunc(maps.Keys(need), func(a, b endpoint) int { return strings.Compare(a.name(), b.name()) }),
 		lists:     map[string]list{},
 	}
 }
@@ -93,9 +102,9 @@ func (c *Cache) Start(ctx context.Context) {
 	c.warm = warm
 	c.mu.Unlock()
 	var wg sync.WaitGroup
-	for _, name := range c.providers {
+	for _, e := range c.endpoints {
 		wg.Add(1)
-		go c.keepFresh(ctx, name, wg.Done)
+		go c.keepFresh(ctx, e, wg.Done)
 	}
 	go func() {
 		wg.Wait()
@@ -103,12 +112,12 @@ func (c *Cache) Start(ctx context.Context) {
 	}()
 }
 
-// keepFresh refreshes one provider's list until ctx is done, calling warmed
+// keepFresh refreshes one endpoint's list until ctx is done, calling warmed
 // once the first fetch has ended.
-func (c *Cache) keepFresh(ctx context.Context, name string, warmed func()) {
+func (c *Cache) keepFresh(ctx context.Context, e endpoint, warmed func()) {
 	for {
 		wait := c.ttl
-		err := c.refresh(ctx, name)
+		err := c.refresh(ctx, e)
 		if warmed != nil {
 			warmed()
 			warmed = nil
@@ -117,7 +126,7 @@ func (c *Cache) keepFresh(ctx context.Context, name string, warmed func()) {
 			if ctx.Err() != nil {
 				return
 			}
-			slog.Warn("model list fetch failed; keeping the previous list", "provider", name, "err", err)
+			slog.Warn("model list fetch failed; keeping the previous list", "endpoint", e.name(), "err", err)
 			wait = min(c.ttl, retryInterval)
 		}
 		t := time.NewTimer(wait)
@@ -130,28 +139,30 @@ func (c *Cache) keepFresh(ctx context.Context, name string, warmed func()) {
 	}
 }
 
-// refresh fetches one provider's list and replaces the cached one.
-func (c *Cache) refresh(ctx context.Context, name string) error {
+// refresh fetches one endpoint's list and replaces the cached one.
+func (c *Cache) refresh(ctx context.Context, e endpoint) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	ids, err := c.fetch(ctx, c.cfg.Providers[name])
+	ids, err := c.fetch(ctx, e)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
-	c.lists[name] = list{ids: ids, fetched: time.Now()}
+	c.lists[e.name()] = list{ids: ids, fetched: time.Now()}
 	c.mu.Unlock()
 	return nil
 }
 
-// fetch reads the provider's model list, following has_more through ?after_id=
+// fetch reads the endpoint's model list, following has_more through ?after_id=
 // for at most maxPages pages.
-func (c *Cache) fetch(ctx context.Context, p config.Provider) ([]string, error) {
-	proto := protocol.Lookup(protocol.ID(p.Type))
+func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
+	p := c.cfg.Providers[e.provider]
+	ep := p.Endpoints[e.proto]
+	proto := protocol.Lookup(protocol.ID(e.proto))
 	var all []string
 	after := ""
 	for page := 1; page <= maxPages; page++ {
-		u := p.BaseURL + proto.ModelsSuffix()
+		u := ep.BaseURL + proto.ModelsSuffix()
 		if after != "" {
 			u += "?after_id=" + url.QueryEscape(after)
 		}
@@ -161,7 +172,7 @@ func (c *Cache) fetch(ctx context.Context, p config.Provider) ([]string, error) 
 		}
 		where := "GET " + req.URL.Redacted()
 		proto.DefaultHeaders(req.Header)
-		Authorize(req.Header, p)
+		Authorize(req.Header, p, ep)
 		// A configured Accept-Encoding would stop the transport from
 		// decompressing the reply, and the list would arrive as encoded
 		// bytes; without it the transport negotiates and decodes on its own.
@@ -193,8 +204,8 @@ func (c *Cache) fetch(ctx context.Context, p config.Provider) ([]string, error) 
 
 // Names assembles the listing (design 6.5): per route in configuration
 // order, an exact route contributes its own name, a discovering pattern route
-// contributes the names its rewrite-free targets' providers list that match
-// the pattern and that routing would send to this route for that target's
+// contributes the names its rewrite-free targets' endpoints list that match
+// the pattern and that routing would send to this route for that endpoint's
 // protocol. The first occurrence of a name wins.
 //
 // A call made while Start's first round of fetches is still running waits
@@ -238,13 +249,15 @@ func (c *Cache) Names(ctx context.Context) []string {
 			if t.Model != "" {
 				continue
 			}
-			proto := protocol.ID(c.cfg.Providers[t.Provider].Type)
-			for _, id := range lists[t.Provider] {
-				if !config.MatchGlob(r.Model, id) {
-					continue
-				}
-				if owner, _, ok := c.routes.Match(proto, id); ok && owner == r.Model {
-					add(id)
+			provider, _ := t.Split()
+			for _, proto := range c.cfg.Protocols(t) {
+				for _, id := range lists[config.EndpointName(provider, proto)] {
+					if !config.MatchGlob(r.Model, id) {
+						continue
+					}
+					if owner, _, ok := c.routes.Match(protocol.ID(proto), id); ok && owner == r.Model {
+						add(id)
+					}
 				}
 			}
 		}
@@ -252,8 +265,8 @@ func (c *Cache) Names(ctx context.Context) []string {
 	return out
 }
 
-// Ages returns, per provider, the age of its cached list. Providers never
-// fetched successfully have no entry.
+// Ages returns, per endpoint name, the age of its cached list. Endpoints
+// never fetched successfully have no entry.
 func (c *Cache) Ages() map[string]time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -265,12 +278,12 @@ func (c *Cache) Ages() map[string]time.Duration {
 	return out
 }
 
-// Authorize applies a provider's configured headers and then its
-// authentication header to h (design 4.2 step 4). A nil header value
-// removes the header; the authentication header always wins. Headers are
-// applied in sorted order so that two names differing only in case resolve
-// the same way every time.
-func Authorize(h http.Header, p config.Provider) {
+// Authorize applies a provider's configured headers and then the
+// endpoint's authentication header to h (design 4.2 step 4). A nil header
+// value removes the header; the authentication header always wins. Headers
+// are applied in sorted order so that two names differing only in case
+// resolve the same way every time.
+func Authorize(h http.Header, p config.Provider, e config.Endpoint) {
 	for _, name := range slices.Sorted(maps.Keys(p.Headers)) {
 		if v := p.Headers[name]; v != nil {
 			h.Set(name, *v)
@@ -278,7 +291,7 @@ func Authorize(h http.Header, p config.Provider) {
 			h.Del(name)
 		}
 	}
-	switch protocol.AuthScheme(p.Auth) {
+	switch protocol.AuthScheme(e.Auth) {
 	case protocol.AuthBearer:
 		h.Set("Authorization", "Bearer "+p.Key)
 	case protocol.AuthXAPIKey:

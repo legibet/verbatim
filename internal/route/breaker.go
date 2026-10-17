@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Breakers holds one circuit breaker per provider (design 8.3). It is safe
-// for concurrent use.
+// Breakers holds one circuit breaker per provider endpoint, keyed by
+// config.EndpointName (design 8.3). It is safe for concurrent use.
 type Breakers struct {
 	threshold int
 	cooldown  time.Duration
@@ -25,7 +25,7 @@ type breaker struct {
 	probing   bool
 }
 
-// State is a provider's breaker state for display.
+// State is an endpoint's breaker state for display.
 type State struct {
 	State     string    // "closed" | "open" | "half_open"
 	Failures  int       // consecutive counted failures
@@ -38,24 +38,24 @@ func NewBreakers(threshold int, cooldown time.Duration) *Breakers {
 	return &Breakers{threshold: threshold, cooldown: cooldown, now: time.Now, m: make(map[string]*breaker)}
 }
 
-func (b *Breakers) get(provider string) *breaker {
-	br := b.m[provider]
+func (b *Breakers) get(endpoint string) *breaker {
+	br := b.m[endpoint]
 	if br == nil {
 		br = &breaker{}
-		b.m[provider] = br
+		b.m[endpoint] = br
 	}
 	return br
 }
 
-// Admit reports whether an attempt to provider may be dispatched now. A
+// Admit reports whether an attempt to the endpoint may be dispatched now. A
 // closed breaker admits everyone; an open one admits no one until the
 // cooldown has passed, then admits exactly one probe and refuses everyone
 // else until that probe reports Success, Failure, or Abandon. probe tells
 // the caller it holds that probe, so only it calls Abandon.
-func (b *Breakers) Admit(provider string) (ok, probe bool) {
+func (b *Breakers) Admit(endpoint string) (ok, probe bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	br := b.get(provider)
+	br := b.get(endpoint)
 	switch {
 	case br.openUntil.IsZero():
 		return true, false
@@ -69,10 +69,10 @@ func (b *Breakers) Admit(provider string) (ok, probe bool) {
 
 // Success records a committed response: the breaker closes and the
 // consecutive failure counter resets.
-func (b *Breakers) Success(provider string) {
+func (b *Breakers) Success(endpoint string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	*b.get(provider) = breaker{}
+	*b.get(endpoint) = breaker{}
 }
 
 // Failure records a counted failure. A closed breaker opens when the counter
@@ -80,10 +80,10 @@ func (b *Breakers) Success(provider string) {
 // the probe's failure reopens the breaker for another cooldown, while a
 // failure of an attempt admitted earlier only counts and leaves the probe
 // in flight alone.
-func (b *Breakers) Failure(provider string, probe bool) {
+func (b *Breakers) Failure(endpoint string, probe bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	br := b.get(provider)
+	br := b.get(endpoint)
 	br.failures++
 	switch {
 	case probe:
@@ -97,20 +97,20 @@ func (b *Breakers) Failure(provider string, probe bool) {
 // Abandon records that a half-open probe ended without a verdict (the client
 // cancelled). The breaker stays open with its cooldown already elapsed, so
 // the next Admit probes again. It does nothing when no probe is in flight.
-func (b *Breakers) Abandon(provider string) {
+func (b *Breakers) Abandon(endpoint string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.get(provider).probing = false
+	b.get(endpoint).probing = false
 }
 
-// State returns the current state of provider's breaker.
-func (b *Breakers) State(provider string) State {
+// State returns the current state of the endpoint's breaker.
+func (b *Breakers) State(endpoint string) State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.state(b.get(provider))
+	return b.state(b.get(endpoint))
 }
 
-// Snapshot returns the state of every provider the breakers have seen.
+// Snapshot returns the state of every endpoint the breakers have seen.
 func (b *Breakers) Snapshot() map[string]State {
 	b.mu.Lock()
 	defer b.mu.Unlock()

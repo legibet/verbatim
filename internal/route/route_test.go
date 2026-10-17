@@ -10,30 +10,37 @@ import (
 )
 
 func testConfig() *config.Config {
+	eps := func(protos ...string) config.Provider {
+		p := config.Provider{Endpoints: map[string]config.Endpoint{}}
+		for _, proto := range protos {
+			p.Endpoints[proto] = config.Endpoint{}
+		}
+		return p
+	}
 	return &config.Config{
 		Providers: map[string]config.Provider{
-			"ms-anth":  {Type: "anthropic"},
-			"ms-chat":  {Type: "chat"},
-			"relay":    {Type: "chat"},
-			"or-anth":  {Type: "anthropic"},
-			"oa-resp":  {Type: "responses"},
-			"oa-chat":  {Type: "chat"},
-			"local":    {Type: "chat"},
-			"rr-a":     {Type: "chat"},
-			"rr-b":     {Type: "chat"},
-			"rr-c":     {Type: "chat"},
-			"rr-d":     {Type: "chat"},
-			"only-gem": {Type: "gemini"},
+			"ms":       eps("anthropic", "chat"),
+			"relay":    eps("chat"),
+			"or":       eps("anthropic", "chat"),
+			"oa":       eps("responses", "chat"),
+			"local":    eps("chat"),
+			"rr-a":     eps("chat"),
+			"rr-b":     eps("chat"),
+			"rr-c":     eps("chat"),
+			"rr-d":     eps("chat"),
+			"only-gem": eps("gemini"),
 		},
 		Routes: []config.Route{
 			{Model: "kimi-k3", Balance: "weighted", Targets: []config.Target{
-				{Provider: "ms-anth", Priority: 1, Weight: 1},
-				{Provider: "ms-chat", Priority: 1, Weight: 3},
+				{Provider: "ms", Priority: 1, Weight: 3},
 				{Provider: "relay", Model: "kimi-k3-0905", Priority: 1, Weight: 1},
-				{Provider: "or-anth", Model: "moonshotai/kimi-k3", Priority: 2, Weight: 1},
+				{Provider: "or.anthropic", Model: "moonshotai/kimi-k3", Priority: 2, Weight: 1},
 			}},
 			{Model: "gpt-*", Balance: "weighted", Targets: []config.Target{
-				{Provider: "oa-resp", Priority: 1, Weight: 1},
+				{Provider: "oa.responses", Priority: 1, Weight: 1},
+			}},
+			{Model: "both", Balance: "weighted", Targets: []config.Target{
+				{Provider: "oa", Priority: 1, Weight: 1},
 			}},
 			{Model: "rr", Balance: "round_robin", Targets: []config.Target{
 				{Provider: "rr-a", Priority: 1, Weight: 5},
@@ -42,7 +49,7 @@ func testConfig() *config.Config {
 				{Provider: "rr-d", Priority: 2, Weight: 1},
 			}},
 			{Model: "*", Balance: "weighted", Targets: []config.Target{
-				{Provider: "or-anth", Priority: 1, Weight: 1},
+				{Provider: "or.anthropic", Priority: 1, Weight: 1},
 				{Provider: "local", Priority: 1, Weight: 1},
 			}},
 		},
@@ -67,15 +74,18 @@ func TestMatch(t *testing.T) {
 		want  []TargetID
 	}{
 		{"exact, filtered to anthropic, model rewrite", protocol.Anthropic, "kimi-k3", "kimi-k3",
-			[]TargetID{{"ms-anth", "kimi-k3"}, {"or-anth", "moonshotai/kimi-k3"}}},
-		{"exact, filtered to chat", protocol.Chat, "kimi-k3", "kimi-k3",
-			[]TargetID{{"ms-chat", "kimi-k3"}, {"relay", "kimi-k3-0905"}}},
+			[]TargetID{{"ms", "kimi-k3"}, {"or", "moonshotai/kimi-k3"}}},
+		{"exact, filtered to chat; an endpoint target serves only its protocol", protocol.Chat, "kimi-k3", "kimi-k3",
+			[]TargetID{{"ms", "kimi-k3"}, {"relay", "kimi-k3-0905"}}},
 		{"pattern with slash-free name", protocol.Responses, "gpt-6", "gpt-*",
-			[]TargetID{{"oa-resp", "gpt-6"}}},
+			[]TargetID{{"oa", "gpt-6"}}},
 		{"name matches gpt-* but no chat target: falls through to catch-all", protocol.Chat, "gpt-6", "*",
 			[]TargetID{{"local", "gpt-6"}}},
+		{"provider target serves responses", protocol.Responses, "both", "both", []TargetID{{"oa", "both"}}},
+		{"provider target serves chat", protocol.Chat, "both", "both", []TargetID{{"oa", "both"}}},
+		{"provider without the protocol: falls through", protocol.Anthropic, "both", "*", []TargetID{{"or", "both"}}},
 		{"catch-all matches slashes", protocol.Anthropic, "anthropic/claude-x", "*",
-			[]TargetID{{"or-anth", "anthropic/claude-x"}}},
+			[]TargetID{{"or", "anthropic/claude-x"}}},
 		{"exact route has no responses target: falls through, catch-all has none either", protocol.Responses, "kimi-k3", "", nil},
 		{"case-sensitive", protocol.Responses, "GPT-6", "", nil},
 	}

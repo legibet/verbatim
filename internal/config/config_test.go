@@ -20,30 +20,25 @@ server:
   idle_timeout: 120s                # upstream body inactivity, also used for error bodies
 
 providers:
-  openai-responses:
-    type: responses
-    base_url: https://api.openai.com/v1
+  openai:
     key: ${OPENAI_KEY}
-  openai-chat:
-    type: chat
-    base_url: https://api.openai.com/v1
-    key: ${OPENAI_KEY}
-  moonshot-anthropic:
-    type: anthropic
-    base_url: https://api.moonshot.ai/anthropic
+    endpoints:
+      responses: {base_url: https://api.openai.com/v1}
+      chat: {base_url: https://api.openai.com/v1}
+      images:
+        base_url: https://api.openai.com/v1
+        header_timeout: 5m           # a non-streamed image is answered once it is drawn
+  moonshot:
     key: ${MOONSHOT_KEY}
-  moonshot-chat:
-    type: chat
-    base_url: https://api.moonshot.ai/v1
-    key: ${MOONSHOT_KEY}
-  openrouter-anthropic:
-    type: anthropic
-    base_url: https://openrouter.ai/api/v1
+    endpoints:
+      anthropic: {base_url: https://api.moonshot.ai/anthropic}
+      chat: {base_url: https://api.moonshot.ai/v1}
+  openrouter:
     key: ${OPENROUTER_KEY}
-    auth: bearer                     # OpenRouter's Messages endpoint takes Authorization: Bearer
-  relay-a-chat:
-    type: chat
-    base_url: https://relay.example/v1
+    endpoints:
+      chat: {base_url: https://openrouter.ai/api/v1}
+      anthropic: {base_url: https://openrouter.ai/api}
+  relay-a:
     key: ${RELAY_A_KEY}
     headers:
       x-title: verbatim
@@ -51,32 +46,31 @@ providers:
     overrides:
       - delete: metadata
       - set: {path: temperature, value: 1}
+    endpoints:
+      chat: {base_url: https://relay.example/v1}
   local-llama:
-    type: chat
-    base_url: http://127.0.0.1:8081/v1
-    auth: none
+    endpoints:
+      chat: {base_url: http://127.0.0.1:8081/v1, auth: none}
 
 routes:
   - model: kimi-k3
     targets:
-      - provider: moonshot-anthropic
-      - provider: moonshot-chat
-        weight: 3
-      - provider: relay-a-chat
+      - provider: moonshot           # its anthropic and chat endpoints
+        weight: 3                    # for chat, 3 of 4 requests go here, 1 to relay-a
+      - provider: relay-a
         model: kimi-k3-0905
-        weight: 1
-      - provider: openrouter-anthropic
+      - provider: openrouter.anthropic   # only OpenRouter's Messages endpoint
         model: moonshotai/kimi-k3
         priority: 2
   - model: "gpt-*"
     targets:
-      - provider: openai-responses
-      - provider: openai-chat
+      - provider: openai             # responses, chat, and images (gpt-image-*)
   - model: "*"
     discover: false
     targets:
-      - provider: openrouter-anthropic
-      - provider: local-llama
+      - provider: openrouter
+      - provider: local-llama        # chat only, when OpenRouter's chat endpoint fails
+        priority: 2
 
 affinity:
   ttl: 1h
@@ -118,9 +112,9 @@ pricing:
 const minimal = `
 providers:
   p:
-    type: chat
-    base_url: https://example.com/v1
     key: k
+    endpoints:
+      chat: {base_url: https://example.com/v1}
 routes:
   - model: m
     targets:
@@ -157,22 +151,26 @@ func TestFullExample(t *testing.T) {
 	if cfg.Server.APIKey != "secret-VERBATIM_KEY" {
 		t.Errorf("api_key = %q", cfg.Server.APIKey)
 	}
-	if len(cfg.Providers) != 7 {
-		t.Fatalf("providers = %d, want 7", len(cfg.Providers))
+	if len(cfg.Providers) != 5 {
+		t.Fatalf("providers = %d, want 5", len(cfg.Providers))
 	}
 	auths := map[string]string{
-		"openai-responses":     "bearer",
-		"openai-chat":          "bearer",
-		"moonshot-anthropic":   "x-api-key",
-		"openrouter-anthropic": "bearer",
-		"local-llama":          "none",
+		"openai.responses":     "bearer",
+		"openai.images":        "bearer",
+		"moonshot.anthropic":   "x-api-key",
+		"openrouter.anthropic": "x-api-key",
+		"local-llama.chat":     "none",
 	}
 	for name, want := range auths {
-		if got := cfg.Providers[name].Auth; got != want {
-			t.Errorf("providers.%s.auth = %q, want %q", name, got, want)
+		provider, proto, _ := strings.Cut(name, ".")
+		if got := cfg.Providers[provider].Endpoints[proto].Auth; got != want {
+			t.Errorf("providers.%s.endpoints.%s.auth = %q, want %q", provider, proto, got, want)
 		}
 	}
-	relay := cfg.Providers["relay-a-chat"]
+	if got := cfg.Providers["openai"].Endpoints["images"].HeaderTimeout; got != Duration(5*time.Minute) {
+		t.Errorf("openai images header_timeout = %s", got)
+	}
+	relay := cfg.Providers["relay-a"]
 	if relay.Key != "secret-RELAY_A_KEY" {
 		t.Errorf("relay key = %q", relay.Key)
 	}
@@ -192,10 +190,9 @@ func TestFullExample(t *testing.T) {
 	}
 	kimi := cfg.Routes[0]
 	wantTargets := []Target{
-		{Provider: "moonshot-anthropic", Priority: 1, Weight: 1},
-		{Provider: "moonshot-chat", Priority: 1, Weight: 3},
-		{Provider: "relay-a-chat", Model: "kimi-k3-0905", Priority: 1, Weight: 1},
-		{Provider: "openrouter-anthropic", Model: "moonshotai/kimi-k3", Priority: 2, Weight: 1},
+		{Provider: "moonshot", Priority: 1, Weight: 3},
+		{Provider: "relay-a", Model: "kimi-k3-0905", Priority: 1, Weight: 1},
+		{Provider: "openrouter.anthropic", Model: "moonshotai/kimi-k3", Priority: 2, Weight: 1},
 	}
 	if !reflect.DeepEqual(kimi.Targets, wantTargets) {
 		t.Errorf("kimi targets = %+v", kimi.Targets)
@@ -239,7 +236,9 @@ func TestDefaults(t *testing.T) {
 			HeaderTimeout: Duration(60 * time.Second),
 			IdleTimeout:   Duration(120 * time.Second),
 		},
-		Providers: map[string]Provider{"p": {Type: "chat", BaseURL: "https://example.com/v1", Key: "k", Auth: "bearer", HeaderTimeout: Duration(60 * time.Second)}},
+		Providers: map[string]Provider{"p": {Key: "k", Endpoints: map[string]Endpoint{
+			"chat": {BaseURL: "https://example.com/v1", Auth: "bearer", HeaderTimeout: Duration(60 * time.Second)},
+		}}},
 		Routes: []Route{{
 			Model:    "m",
 			Targets:  []Target{{Provider: "p", Priority: 1, Weight: 1}},
@@ -257,40 +256,84 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-func TestAuthDefaultsByType(t *testing.T) {
+func TestAuthDefaultsByProtocol(t *testing.T) {
 	cfg, _ := mustParse(t, `
 providers:
-  c: {type: chat, base_url: "https://x/v1", key: k}
-  r: {type: responses, base_url: "https://x/v1", key: k}
-  a: {type: anthropic, base_url: "https://x/anthropic", key: k}
-  g: {type: gemini, base_url: "https://x/v1beta", key: k}
-  i: {type: images, base_url: "https://x/v1", key: k}
+  p:
+    key: k
+    endpoints:
+      chat: {base_url: "https://x/v1"}
+      responses: {base_url: "https://x/v1"}
+      anthropic: {base_url: "https://x/anthropic"}
+      gemini: {base_url: "https://x"}
+      images: {base_url: "https://x/v1"}
+  q:
+    key: k
+    endpoints:
+      anthropic: {base_url: "https://y", auth: bearer}
 routes:
   - model: m
-    targets: [{provider: c}]
+    targets: [{provider: p}]
 `)
-	for name, want := range map[string]string{"c": "bearer", "r": "bearer", "a": "x-api-key", "g": "x-goog-api-key", "i": "bearer"} {
-		if got := cfg.Providers[name].Auth; got != want {
-			t.Errorf("%s auth = %q, want %q", name, got, want)
+	for proto, want := range map[string]string{"chat": "bearer", "responses": "bearer", "anthropic": "x-api-key", "gemini": "x-goog-api-key", "images": "bearer"} {
+		if got := cfg.Providers["p"].Endpoints[proto].Auth; got != want {
+			t.Errorf("%s auth = %q, want %q", proto, got, want)
 		}
+	}
+	if got := cfg.Providers["q"].Endpoints["anthropic"].Auth; got != "bearer" {
+		t.Errorf("explicit auth = %q, want bearer", got)
 	}
 }
 
-func TestProviderHeaderTimeout(t *testing.T) {
+func TestEndpointHeaderTimeout(t *testing.T) {
 	cfg, _ := mustParse(t, `
 server: {header_timeout: 20s}
 providers:
-  slow: {type: images, base_url: "https://x/v1", key: k, header_timeout: 5m}
-  fast: {type: chat, base_url: "https://x/v1", key: k}
+  p:
+    key: k
+    endpoints:
+      images: {base_url: "https://x/v1", header_timeout: 5m}
+      chat: {base_url: "https://x/v1"}
 routes:
   - model: m
-    targets: [{provider: fast}, {provider: slow}]
+    targets: [{provider: p}]
 `)
-	if got := cfg.Providers["slow"].HeaderTimeout; got != Duration(5*time.Minute) {
-		t.Errorf("slow header_timeout = %s", got)
+	eps := cfg.Providers["p"].Endpoints
+	if got := eps["images"].HeaderTimeout; got != Duration(5*time.Minute) {
+		t.Errorf("images header_timeout = %s", got)
 	}
-	if got := cfg.Providers["fast"].HeaderTimeout; got != Duration(20*time.Second) {
-		t.Errorf("fast header_timeout = %s, want server.header_timeout", got)
+	if got := eps["chat"].HeaderTimeout; got != Duration(20*time.Second) {
+		t.Errorf("chat header_timeout = %s, want server.header_timeout", got)
+	}
+}
+
+func TestTargetProtocols(t *testing.T) {
+	cfg, _ := mustParse(t, `
+providers:
+  p:
+    key: k
+    endpoints:
+      responses: {base_url: "https://x/v1"}
+      chat: {base_url: "https://x/v1"}
+      anthropic: {base_url: "https://x"}
+routes:
+  - model: m
+    targets:
+      - provider: p.chat
+      - provider: p.responses     # another protocol: not a duplicate
+      - provider: p.anthropic
+        model: other
+`)
+	for _, tt := range []struct {
+		target string
+		want   []string
+	}{
+		{"p", []string{"anthropic", "chat", "responses"}},
+		{"p.chat", []string{"chat"}},
+	} {
+		if got := cfg.Protocols(Target{Provider: tt.target}); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("Protocols(%s) = %v, want %v", tt.target, got, tt.want)
+		}
 	}
 }
 
@@ -303,7 +346,7 @@ func TestExplicitZeroIsKept(t *testing.T) {
 
 func TestBaseURLTrailingSlash(t *testing.T) {
 	cfg, _ := mustParse(t, strings.Replace(minimal, "https://example.com/v1", "https://example.com/v1/", 1))
-	if got := cfg.Providers["p"].BaseURL; got != "https://example.com/v1" {
+	if got := cfg.Providers["p"].Endpoints["chat"].BaseURL; got != "https://example.com/v1" {
 		t.Errorf("base_url = %q", got)
 	}
 }
@@ -318,9 +361,9 @@ func TestEnvExpansion(t *testing.T) {
 # ${VB_UNSET_IN_COMMENT} must not matter
 providers:
   p:
-    type: chat
-    base_url: https://${VB_HOST}/v1
     key: ${VB_KEY}
+    endpoints:
+      chat: {base_url: "https://${VB_HOST}/v1"}
     headers:
       x-a: pre-${VB_HDR}-post
       x-b: ${VB_LITERAL}
@@ -336,8 +379,8 @@ pricing:
   sources: ["https://${VB_HOST}/prices.json"]
 `)
 	p := cfg.Providers["p"]
-	if p.Key != "k-123" || p.BaseURL != "https://example.org/v1" {
-		t.Errorf("key/base_url = %q/%q", p.Key, p.BaseURL)
+	if p.Key != "k-123" || p.Endpoints["chat"].BaseURL != "https://example.org/v1" {
+		t.Errorf("key/base_url = %q/%q", p.Key, p.Endpoints["chat"].BaseURL)
 	}
 	if *p.Headers["x-a"] != "pre-h-value-post" {
 		t.Errorf("x-a = %q", *p.Headers["x-a"])
@@ -366,11 +409,11 @@ func TestEnvExpansionErrors(t *testing.T) {
 		want      []string
 	}{
 		{"unset", strings.Replace(minimal, "key: k", "key: ${VB_TEST_UNSET}", 1),
-			[]string{"line 6", "providers.p.key", "VB_TEST_UNSET is not set"}},
+			[]string{"line 4", "providers.p.key", "VB_TEST_UNSET is not set"}},
 		{"unterminated", strings.Replace(minimal, "key: k", "key: ${VB_KEY", 1), []string{"providers.p.key", "unterminated"}},
 		{"empty name", strings.Replace(minimal, "key: k", "key: a${}b", 1), []string{"providers.p.key", "empty variable name"}},
 		// A set but empty variable expands to "" and is then caught by validation.
-		{"empty value", strings.Replace(minimal, "key: k", "key: ${VB_EMPTY}", 1), []string{"providers.p.key: required unless auth is none"}},
+		{"empty value", strings.Replace(minimal, "key: k", "key: ${VB_EMPTY}", 1), []string{"providers.p.key: required unless every endpoint's auth is none"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -395,6 +438,7 @@ func TestSchemaErrors(t *testing.T) {
 		{"unknown nested key", minimal + "server:\n  lisen: x\n", `server.lisen: unknown field "lisen"`},
 		{"unknown target key", strings.Replace(minimal, "- provider: p", "- provider: p\n        wieght: 2", 1), `routes[0].targets[0].wieght: unknown field`},
 		{"unknown provider key", strings.Replace(minimal, "key: k", "key: k\n    model: x", 1), `providers.p.model: unknown field`},
+		{"unknown endpoint key", strings.Replace(minimal, "{base_url:", "{bogus: 1, base_url:", 1), `providers.p.endpoints.chat.bogus: unknown field`},
 		{"bad duration", minimal + "breaker:\n  cooldown: 1w\n", `line 12: breaker.cooldown: invalid duration "1w"`},
 		{"unknown key in inline merge", minimal + "server: {<<: {max_inflght: 1}}\n", `server.max_inflght: unknown field "max_inflght"`},
 		{"unknown key in merge list", minimal + "server:\n  <<: [{listen: \"127.0.0.1:1\"}, {bogus: 1}]\n", `server.bogus: unknown field "bogus"`},
@@ -416,24 +460,34 @@ func TestValidation(t *testing.T) {
 	provider := func(body string) string {
 		return "providers:\n  p:\n" + body + "routes:\n  - model: m\n    targets: [{provider: p}]\n"
 	}
-	chat := "    type: chat\n    base_url: https://x/v1\n    key: k\n"
-	anthropic := "    type: anthropic\n    base_url: https://x/anthropic\n    key: k\n"
+	// endpoint renders a provider with key k and the one endpoint given as a
+	// flow mapping body.
+	endpoint := func(proto, fields string) string {
+		return provider("    key: k\n    endpoints:\n      " + proto + ": {" + fields + "}\n")
+	}
+	chat := "    key: k\n    endpoints:\n      chat: {base_url: \"https://x/v1\"}\n"
+	anthropic := "    key: k\n    endpoints:\n      chat: {base_url: \"https://x/v1\"}\n      anthropic: {base_url: \"https://x/anthropic\"}\n"
 	routes := func(body string) string {
-		return "providers:\n  p: {type: chat, base_url: \"https://x/v1\", key: k}\n  q: {type: anthropic, base_url: \"https://x/a\", key: k}\nroutes:\n" + body
+		return "providers:\n  p: {key: k, endpoints: {chat: {base_url: \"https://x/v1\"}, responses: {base_url: \"https://x/v1\"}}}\n" +
+			"  q: {key: k, endpoints: {anthropic: {base_url: \"https://x/a\"}}}\nroutes:\n" + body
 	}
 	tests := []struct {
 		name, src, want string
 	}{
 		// providers
 		{"no providers", "routes: [{model: m, targets: [{provider: p}]}]\n", "providers: at least one provider is required"},
-		{"bad type", provider("    type: grpc\n    base_url: https://x\n    key: k\n"), `providers.p.type: must be one of`},
-		{"no base_url", provider("    type: chat\n    key: k\n"), "providers.p.base_url: required"},
-		{"relative base_url", provider("    type: chat\n    base_url: /v1\n    key: k\n"), "providers.p.base_url: must be an absolute http or https URL"},
-		{"ftp base_url", provider("    type: chat\n    base_url: ftp://x/v1\n    key: k\n"), "providers.p.base_url: must be an absolute"},
-		{"query in base_url", provider("    type: chat\n    base_url: https://x/v1?a=b\n    key: k\n"), "providers.p.base_url: must not contain a query string or fragment"},
-		{"fragment in base_url", provider("    type: chat\n    base_url: https://x/v1#f\n    key: k\n"), "providers.p.base_url: must not contain"},
-		{"missing key", provider("    type: chat\n    base_url: https://x/v1\n"), "providers.p.key: required unless auth is none"},
-		{"bad auth", provider(chat + "    auth: basic\n"), `providers.p.auth: must be one of bearer, x-api-key, x-goog-api-key, none, got "basic"`},
+		{"dot in name", "providers:\n  p.x:\n" + chat + "routes: [{model: m, targets: [{provider: p.x}]}]\n", `providers.p.x: a provider name cannot contain "."`},
+		{"no endpoints", provider("    key: k\n"), "providers.p.endpoints: at least one endpoint is required"},
+		{"unknown protocol", endpoint("grpc", "base_url: \"https://x\""), `providers.p.endpoints.grpc: unknown protocol; must be one of chat, responses, anthropic, gemini, images`},
+		{"no base_url", endpoint("chat", ""), "providers.p.endpoints.chat.base_url: required"},
+		{"relative base_url", endpoint("chat", "base_url: /v1"), "providers.p.endpoints.chat.base_url: must be an absolute http or https URL"},
+		{"ftp base_url", endpoint("chat", "base_url: \"ftp://x/v1\""), "providers.p.endpoints.chat.base_url: must be an absolute"},
+		{"query in base_url", endpoint("chat", "base_url: \"https://x/v1?a=b\""), "providers.p.endpoints.chat.base_url: must not contain a query string or fragment"},
+		{"fragment in base_url", endpoint("chat", "base_url: \"https://x/v1#f\""), "providers.p.endpoints.chat.base_url: must not contain"},
+		{"missing key", provider("    endpoints:\n      chat: {base_url: \"https://x/v1\"}\n"), "providers.p.key: required unless every endpoint's auth is none"},
+		{"missing key, one endpoint keyless", provider("    endpoints:\n      chat: {base_url: \"https://x/v1\", auth: none}\n      anthropic: {base_url: \"https://x\"}\n"), "providers.p.key: required unless every endpoint's auth is none"},
+		{"bad auth", endpoint("chat", "base_url: \"https://x/v1\", auth: basic"), `providers.p.endpoints.chat.auth: must be one of bearer, x-api-key, x-goog-api-key, none, got "basic"`},
+		{"negative header_timeout", endpoint("chat", "base_url: \"https://x/v1\", header_timeout: -1s"), "providers.p.endpoints.chat.header_timeout: must be greater than 0"},
 		{"bad header name", provider(chat + "    headers:\n      \"bad header\": x\n"), "providers.p.headers.bad header: not a valid header name"},
 		{"managed header", provider(chat + "    headers:\n      content-length: \"5\"\n"), "providers.p.headers.content-length: managed by verbatim"},
 		{"managed header host", provider(chat + "    headers:\n      HOST: x\n"), "providers.p.headers.HOST: managed by verbatim"},
@@ -441,10 +495,9 @@ func TestValidation(t *testing.T) {
 		{"header value NUL", provider(chat + "    headers:\n      x-a: \"a\\0b\"\n"), "providers.p.headers.x-a: value contains a control character"},
 		{"header value control", provider(chat + "    headers:\n      x-a: \"a\\x01b\"\n"), "providers.p.headers.x-a: value contains a control character"},
 		{"header value DEL", provider(chat + "    headers:\n      x-a: \"a\\x7fb\"\n"), "providers.p.headers.x-a: value contains a control character"},
-		{"key control", provider("    type: chat\n    base_url: https://x/v1\n    key: \"k\\r\"\n"), "providers.p.key: contains a control character"},
+		{"key control", strings.Replace(provider(chat), "key: k", "key: \"k\\r\"", 1), "providers.p.key: contains a control character"},
 		{"api_key control", minimal + "server:\n  api_key: \"s\\x1b\"\n", "server.api_key: contains a control character"},
-		{"negative header_timeout", provider(chat + "    header_timeout: -1s\n"), "providers.p.header_timeout: must be greater than 0"},
-		{"images overrides", provider("    type: images\n    base_url: https://x/v1\n    key: k\n    overrides:\n      - delete: quality\n"), "providers.p.overrides: not supported on an images provider"},
+		{"images overrides", provider(chat + "      images: {base_url: \"https://x/v1\"}\n    overrides:\n      - delete: quality\n"), "providers.p.overrides: not supported on a provider with an images endpoint"},
 		// overrides
 		{"override neither", provider(chat + "    overrides:\n      - {}\n"), "providers.p.overrides[0]: must have exactly one of delete or set"},
 		{"override both", provider(chat + "    overrides:\n      - {delete: a, set: {path: b, value: 1}}\n"), "providers.p.overrides[0]: must have exactly one"},
@@ -452,9 +505,9 @@ func TestValidation(t *testing.T) {
 		{"delete model", provider(chat + "    overrides:\n      - delete: model\n"), `providers.p.overrides[0].delete: "model": model and stream cannot be overridden`},
 		{"set nested stream", provider(chat + "    overrides:\n      - set: {path: a.stream.b, value: 1}\n"), `overrides[0].set.path: "a.stream.b": model and stream`},
 		{"forced key model", provider(chat + "    overrides:\n      - delete: \"a.:model\"\n"), "model and stream cannot be overridden"},
-		{"anthropic system", provider(anthropic + "    overrides:\n      - delete: system\n"), `"system": system, tools and messages cannot be overridden on an anthropic provider`},
-		{"anthropic messages nested", provider(anthropic + "    overrides:\n      - set: {path: messages.0.x, value: 1}\n"), "cannot be overridden on an anthropic provider"},
-		{"anthropic tools", provider(anthropic + "    overrides:\n      - delete: tools\n"), "cannot be overridden on an anthropic provider"},
+		{"anthropic system", provider(anthropic + "    overrides:\n      - delete: system\n"), `"system": system, tools and messages cannot be overridden on a provider with an anthropic endpoint`},
+		{"anthropic messages nested", provider(anthropic + "    overrides:\n      - set: {path: messages.0.x, value: 1}\n"), "cannot be overridden on a provider with an anthropic endpoint"},
+		{"anthropic tools", provider(anthropic + "    overrides:\n      - delete: tools\n"), "cannot be overridden on a provider with an anthropic endpoint"},
 		{"overlap equal", provider(chat + "    overrides:\n      - delete: a\n      - set: {path: a, value: 1}\n"), `providers.p.overrides[1].set.path: "a" overlaps overrides[0]`},
 		{"overlap prefix", provider(chat + "    overrides:\n      - set: {path: a.b, value: 1}\n      - delete: a\n"), `overrides[1].delete: "a" overlaps overrides[0]`},
 		{"wildcard path", provider(chat + "    overrides:\n      - delete: tools.#.x\n"), "wildcards, queries and modifiers are not supported"},
@@ -463,7 +516,7 @@ func TestValidation(t *testing.T) {
 		{"timestamp value", provider(chat + "    overrides:\n      - set: {path: a, value: 2026-10-15}\n"), "set.value: a timestamp is not a JSON value"},
 		{"infinite value", provider(chat + "    overrides:\n      - set: {path: a, value: .inf}\n"), "set.value: infinity and NaN are not JSON values"},
 		// routes
-		{"no routes", "providers:\n  p: {type: chat, base_url: \"https://x\", key: k}\n", "routes: at least one route is required"},
+		{"no routes", "providers:\n  p:\n" + chat, "routes: at least one route is required"},
 		{"empty route model", routes("  - targets: [{provider: p}]\n"), "routes[0].model: required"},
 		{"duplicate route", routes("  - model: m\n    targets: [{provider: p}]\n  - model: m\n    targets: [{provider: q}]\n"), `routes[1].model: "m" duplicates routes[0]`},
 		{"no targets", routes("  - model: m\n"), "routes[0].targets: at least one target is required"},
@@ -473,6 +526,11 @@ func TestValidation(t *testing.T) {
 		{"negative priority", routes("  - model: m\n    targets: [{provider: p, priority: -1}]\n"), "routes[0].targets[0].priority: must be at least 1"},
 		{"duplicate target", routes("  - model: m\n    targets: [{provider: p, model: x}, {provider: p, model: x, priority: 2}]\n"), "routes[0].targets[1]: duplicates targets[0]"},
 		{"duplicate target by route name", routes("  - model: m\n    targets: [{provider: p}, {provider: p, model: m, priority: 2}]\n"), "routes[0].targets[1]: duplicates targets[0]"},
+		{"duplicate target by endpoint", routes("  - model: m\n    targets: [{provider: p}, {provider: p.responses, priority: 2}]\n"),
+			"routes[0].targets[1]: duplicates targets[0] (same provider, model and protocol responses)"},
+		{"empty protocol", routes("  - model: m\n    targets: [{provider: p.}]\n"), `routes[0].targets[0].provider: "p.": a protocol must follow the "."`},
+		{"undefined endpoint", routes("  - model: m\n    targets: [{provider: q.chat}]\n"), `routes[0].targets[0].provider: provider "q" has no "chat" endpoint`},
+		{"undefined provider of endpoint", routes("  - model: m\n    targets: [{provider: nope.chat}]\n"), `routes[0].targets[0].provider: "nope" is not defined in providers`},
 		{"bad balance", routes("  - model: m\n    balance: random\n    targets: [{provider: p}]\n"), `routes[0].balance: must be weighted or round_robin, got "random"`},
 		// affinity
 		{"bad mode", minimal + "affinity:\n  mode: sticky\n", `affinity.mode: must be prefer or strict, got "sticky"`},
@@ -516,9 +574,9 @@ func TestValidOverrides(t *testing.T) {
 	cfg, _ := mustParse(t, `
 providers:
   a:
-    type: anthropic
-    base_url: https://x/anthropic
     key: k
+    endpoints:
+      anthropic: {base_url: "https://x/anthropic"}
     overrides:
       - delete: metadata
       - delete: ab               # does not overlap "a"
@@ -538,7 +596,7 @@ routes:
 func TestAllProblemsReported(t *testing.T) {
 	_, _, err := Parse([]byte(`
 providers:
-  p: {type: grpc, base_url: "https://x"}
+  p: {endpoints: {grpc: {base_url: "https://x"}}}
 routes:
   - model: m
     targets: [{provider: nope, weight: 0}]
@@ -552,7 +610,7 @@ breaker:
 	if !strings.HasPrefix(msg, "cfg.yaml: invalid configuration:\n") {
 		t.Errorf("error header: %q", msg)
 	}
-	for _, w := range []string{"providers.p.type", "routes[0].targets[0].provider", "routes[0].targets[0].weight", "breaker.failure_threshold"} {
+	for _, w := range []string{"providers.p.endpoints.grpc", "routes[0].targets[0].provider", "routes[0].targets[0].weight", "breaker.failure_threshold"} {
 		if !strings.Contains(msg, "\n  "+w+": ") {
 			t.Errorf("error does not list %s on its own line:\n%s", w, msg)
 		}
@@ -570,13 +628,13 @@ func TestWarnings(t *testing.T) {
 			[]string{`server.api_key: not set and server.listen "0.0.0.0:8080" is not a loopback address; the server will accept unauthenticated requests`}},
 		{"all interfaces without key", minimal + "server:\n  listen: \":8080\"\n", []string{"server.api_key: not set"}},
 		{"public with key", minimal + "server:\n  listen: 0.0.0.0:8080\n  api_key: s\n", nil},
-		{"key with auth none", "providers:\n  p: {type: chat, base_url: \"http://x\", auth: none, key: k}\nroutes: [{model: m, targets: [{provider: p}]}]\n",
-			[]string{"providers.p.key: ignored because auth is none"}},
+		{"key with auth none", "providers:\n  p: {key: k, endpoints: {chat: {base_url: \"http://x\", auth: none}}}\nroutes: [{model: m, targets: [{provider: p}]}]\n",
+			[]string{"providers.p.key: ignored because every endpoint's auth is none"}},
 		{"discover on exact route", strings.Replace(minimal, "  - model: m\n", "  - model: m\n    discover: true\n", 1),
 			[]string{"routes[0].discover: ignored on an exact-name route"}},
 		{"shadowed exact route", `
 providers:
-  p: {type: chat, base_url: "https://x", key: k}
+  p: {key: k, endpoints: {chat: {base_url: "https://x"}}}
 routes:
   - model: "gpt-*"
     targets: [{provider: p}]
@@ -585,17 +643,26 @@ routes:
 `, []string{`routes[1]: unreachable: earlier pattern routes starting at routes[0] ("gpt-*") match "gpt-5"`}},
 		{"exact route reachable for another protocol", `
 providers:
-  p: {type: chat, base_url: "https://x", key: k}
-  q: {type: anthropic, base_url: "https://x", key: k}
+  p: {key: k, endpoints: {chat: {base_url: "https://x"}}}
+  q: {key: k, endpoints: {anthropic: {base_url: "https://x"}}}
 routes:
   - model: "gpt-*"
     targets: [{provider: p}]
   - model: gpt-5
     targets: [{provider: p}, {provider: q}]
 `, nil},
+		{"exact route reachable for another endpoint", `
+providers:
+  p: {key: k, endpoints: {chat: {base_url: "https://x"}, responses: {base_url: "https://x"}}}
+routes:
+  - model: "gpt-*"
+    targets: [{provider: p.chat}]
+  - model: gpt-5
+    targets: [{provider: p}]
+`, nil},
 		{"exact route before pattern", `
 providers:
-  p: {type: chat, base_url: "https://x", key: k}
+  p: {key: k, endpoints: {chat: {base_url: "https://x"}}}
 routes:
   - model: gpt-5
     targets: [{provider: p}]
@@ -624,18 +691,17 @@ server:
   api_key: client-secret
 providers:
   p:
-    type: chat
-    base_url: https://user:pass@x.example/v1
     key: provider-secret
+    endpoints:
+      chat: {base_url: "https://user:pass@x.example/v1"}
     headers:
       x-token: header-secret
       x-drop: null
     overrides:
       - set: {path: a, value: 1}
   n:
-    type: chat
-    base_url: http://127.0.0.1/v1
-    auth: none
+    endpoints:
+      chat: {base_url: "http://127.0.0.1/v1", auth: none}
 routes:
   - model: m
     targets: [{provider: p}]
@@ -653,8 +719,8 @@ pricing:
 	if p.Key != "***" || r.Providers["n"].Key != "" {
 		t.Errorf("keys = %q, %q", p.Key, r.Providers["n"].Key)
 	}
-	if p.BaseURL != "https://x.example/v1" {
-		t.Errorf("base_url = %q", p.BaseURL)
+	if got := p.Endpoints["chat"].BaseURL; got != "https://x.example/v1" {
+		t.Errorf("base_url = %q", got)
 	}
 	if *p.Headers["x-token"] != "***" || p.Headers["x-drop"] != nil {
 		t.Errorf("headers = %v / %v", *p.Headers["x-token"], p.Headers["x-drop"])
@@ -662,6 +728,7 @@ pricing:
 
 	// Mutating the copy must not reach the original.
 	p.Overrides[0].Set.Path = "changed"
+	p.Endpoints["chat"] = Endpoint{}
 	r.Routes[0].Targets[0].Provider = "changed"
 	*r.Routes[0].Discover = false
 	r.Affinity.Rules[0].Key[0].Header = "changed"
@@ -669,7 +736,7 @@ pricing:
 
 	o := cfg.Providers["p"]
 	if cfg.Server.APIKey != "client-secret" || o.Key != "provider-secret" || *o.Headers["x-token"] != "header-secret" ||
-		o.BaseURL != "https://user:pass@x.example/v1" || o.Overrides[0].Set.Path != "a" ||
+		o.Endpoints["chat"].BaseURL != "https://user:pass@x.example/v1" || o.Overrides[0].Set.Path != "a" ||
 		cfg.Routes[0].Targets[0].Provider != "p" || !*cfg.Routes[0].Discover ||
 		cfg.Affinity.Rules[0].Key[0].Header != "x-s" || cfg.Pricing.Aliases["a"] != "b" {
 		t.Errorf("original mutated: %+v", cfg)
@@ -720,18 +787,19 @@ func TestAnchorsAndMerge(t *testing.T) {
 	cfg, _ := mustParse(t, `
 providers:
   a: &base
-    type: chat
-    base_url: https://x/v1
     key: ${VB_KEY}
+    endpoints:
+      chat: {base_url: "https://x/v1"}
   b:
     <<: *base
-    base_url: https://y/v1
+    endpoints:
+      responses: {base_url: "https://y/v1"}
 routes:
   - model: m
     targets: [{provider: a}, {provider: b}]
 `)
 	b := cfg.Providers["b"]
-	if b.Key != "k-123" || b.Type != "chat" || b.BaseURL != "https://y/v1" {
+	if want := map[string]Endpoint{"responses": {BaseURL: "https://y/v1", Auth: "bearer", HeaderTimeout: cfg.Server.HeaderTimeout}}; b.Key != "k-123" || !reflect.DeepEqual(b.Endpoints, want) {
 		t.Errorf("merged provider = %+v", b)
 	}
 }
@@ -741,7 +809,7 @@ func TestPatternRouteTargetWithoutModel(t *testing.T) {
 	// is a different target from any literal name.
 	mustParse(t, `
 providers:
-  p: {type: chat, base_url: "https://x/v1", key: k}
+  p: {key: k, endpoints: {chat: {base_url: "https://x/v1"}}}
 routes:
   - model: "m*"
     targets: [{provider: p}, {provider: p, model: "m*"}]
@@ -755,8 +823,8 @@ func TestAnchorsExpansion(t *testing.T) {
 		_, _, err := Parse([]byte(`
 providers:
   a:
-    <<: {type: chat, base_url: "https://x/v1", key: &k "${VB_TEST_UNSET}"}
-  b: {type: chat, base_url: "https://y/v1", key: *k}
+    <<: {endpoints: {chat: {base_url: "https://x/v1"}}, key: &k "${VB_TEST_UNSET}"}
+  b: {endpoints: {chat: {base_url: "https://y/v1"}}, key: *k}
 routes:
   - model: m
     targets: [{provider: a}, {provider: b}]
@@ -772,17 +840,18 @@ routes:
 		cfg, _ := mustParse(t, `
 providers:
   a: &base
-    type: chat
-    base_url: https://x/v1
     key: ${VB_ONCE}
     headers:
       x-a: &h "${VB_ONCE}"
       x-b: *h
+    endpoints:
+      chat: {base_url: "https://x/v1"}
   b:
     <<: *base
   c:
     <<: [*base]
-    base_url: https://y/v1
+    endpoints:
+      chat: {base_url: "https://y/v1"}
 routes:
   - model: m
     targets: [{provider: a}, {provider: b}, {provider: c}]
@@ -794,7 +863,7 @@ routes:
 				t.Errorf("provider %s: key %q, x-a %q, x-b %q; want %q", name, p.Key, *p.Headers["x-a"], *p.Headers["x-b"], want)
 			}
 		}
-		if got := cfg.Providers["c"].BaseURL; got != "https://y/v1" {
+		if got := cfg.Providers["c"].Endpoints["chat"].BaseURL; got != "https://y/v1" {
 			t.Errorf("c base_url = %q", got)
 		}
 	})

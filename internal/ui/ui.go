@@ -282,17 +282,18 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 }
 
 // ProvidersView is the response of /ui/api/providers, also read by
-// `verbatim status`. Counters cover the last hour.
+// `verbatim status`: one entry per provider endpoint, sorted by provider and
+// protocol. Counters cover the last hour.
 type ProvidersView struct {
-	Providers  []ProviderView `json:"providers"`
+	Endpoints  []EndpointView `json:"endpoints"`
 	LogDropped int64          `json:"log_dropped"`
 	PinsTotal  int            `json:"pins_total"`
 }
 
-// ProviderView is one configured provider's live state.
-type ProviderView struct {
-	Name        string      `json:"name"`
-	Type        string      `json:"type"`
+// EndpointView is one provider endpoint's live state.
+type EndpointView struct {
+	Provider    string      `json:"provider"`
+	Protocol    string      `json:"protocol"`
 	BaseURL     string      `json:"base_url"` // redacted
 	Breaker     BreakerView `json:"breaker"`
 	Pins        int         `json:"pins"`
@@ -302,7 +303,7 @@ type ProviderView struct {
 	ErrorEvents int64       `json:"error_events"`
 }
 
-// BreakerView is a provider's circuit breaker state.
+// BreakerView is an endpoint's circuit breaker state.
 type BreakerView struct {
 	State     string     `json:"state"` // closed | open | half_open
 	Failures  int        `json:"failures"`
@@ -311,34 +312,38 @@ type BreakerView struct {
 
 func (s *server) providers(w http.ResponseWriter, r *http.Request) {
 	st := s.stats()
-	counts, err := s.store.ProviderStats(time.Now().Add(-time.Hour))
+	counts, err := s.store.EndpointStats(time.Now().Add(-time.Hour))
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
-	v := ProvidersView{Providers: []ProviderView{}, LogDropped: st.LogDropped, PinsTotal: st.PinsTotal}
+	v := ProvidersView{Endpoints: []EndpointView{}, LogDropped: st.LogDropped, PinsTotal: st.PinsTotal}
 	for _, name := range slices.Sorted(maps.Keys(s.config.Providers)) {
 		p := s.config.Providers[name]
-		pv := ProviderView{
-			Name:        name,
-			Type:        p.Type,
-			BaseURL:     p.BaseURL,
-			Breaker:     BreakerView{State: "closed"}, // a provider the breakers have not seen yet
-			Pins:        st.Pins[name],
-			Committed:   counts[name].Committed,
-			Failover:    counts[name].Failover,
-			ErrorEvents: counts[name].ErrorEvents,
-		}
-		if b, ok := st.Breakers[name]; ok {
-			pv.Breaker = BreakerView{State: b.State, Failures: b.Failures}
-			if !b.OpenUntil.IsZero() {
-				pv.Breaker.OpenUntil = &b.OpenUntil
+		for _, proto := range slices.Sorted(maps.Keys(p.Endpoints)) {
+			ep := config.EndpointName(name, proto)
+			c := counts[store.Endpoint{Provider: name, Protocol: proto}]
+			ev := EndpointView{
+				Provider:    name,
+				Protocol:    proto,
+				BaseURL:     p.Endpoints[proto].BaseURL,
+				Breaker:     BreakerView{State: "closed"}, // an endpoint the breakers have not seen yet
+				Pins:        st.Pins[ep],
+				Committed:   c.Committed,
+				Failover:    c.Failover,
+				ErrorEvents: c.ErrorEvents,
 			}
+			if b, ok := st.Breakers[ep]; ok {
+				ev.Breaker = BreakerView{State: b.State, Failures: b.Failures}
+				if !b.OpenUntil.IsZero() {
+					ev.Breaker.OpenUntil = &b.OpenUntil
+				}
+			}
+			if age, ok := st.ModelsAge[ep]; ok {
+				ev.ModelsAgeS = new(int64(age / time.Second))
+			}
+			v.Endpoints = append(v.Endpoints, ev)
 		}
-		if age, ok := st.ModelsAge[name]; ok {
-			pv.ModelsAgeS = new(int64(age / time.Second))
-		}
-		v.Providers = append(v.Providers, pv)
 	}
 	writeJSON(w, http.StatusOK, v)
 }

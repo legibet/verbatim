@@ -76,7 +76,7 @@ type Protocol interface {
 	// Match recognizes an inbound request path. model is set only when the
 	// model lives in the URL (gemini).
 	Match(method, path string) (op Operation, model string, ok bool)
-	// Suffix is the path appended to a provider's base_url for an operation.
+	// Suffix is the path appended to an endpoint's base_url for an operation.
 	// base_url is what the protocol's official SDK takes as its base URL, so
 	// the suffix carries the version for anthropic and gemini but not for
 	// the OpenAI protocols, whose SDK base URL already ends in /v1.

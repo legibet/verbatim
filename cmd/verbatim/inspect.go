@@ -391,21 +391,21 @@ func status(args []string) int {
 		return 1
 	}
 
-	t := newTable(column{name: "PROVIDER"}, column{name: "TYPE"}, column{name: "BREAKER"},
+	t := newTable(column{name: "PROVIDER"}, column{name: "PROTOCOL"}, column{name: "BREAKER"},
 		column{"FAILURES", true}, column{name: "OPEN UNTIL"}, column{"PINS", true}, column{"MODELS AGE", true},
 		column{"COMMITTED", true}, column{"FAILOVER", true}, column{"ERROR EVENTS", true})
 	var lines [][]string
-	for _, p := range v.Providers {
+	for _, e := range v.Endpoints {
 		openUntil := "-"
-		if p.Breaker.OpenUntil != nil {
-			openUntil = p.Breaker.OpenUntil.Local().Format(time.TimeOnly)
+		if e.Breaker.OpenUntil != nil {
+			openUntil = e.Breaker.OpenUntil.Local().Format(time.TimeOnly)
 		}
 		age := "never"
-		if p.ModelsAgeS != nil {
-			age = (time.Duration(*p.ModelsAgeS) * time.Second).String()
+		if e.ModelsAgeS != nil {
+			age = (time.Duration(*e.ModelsAgeS) * time.Second).String()
 		}
-		lines = append(lines, []string{p.Name, p.Type, p.Breaker.State, strconv.Itoa(p.Breaker.Failures), openUntil,
-			strconv.Itoa(p.Pins), age, count(p.Committed), count(p.Failover), count(p.ErrorEvents)})
+		lines = append(lines, []string{e.Provider, e.Protocol, e.Breaker.State, strconv.Itoa(e.Breaker.Failures), openUntil,
+			strconv.Itoa(e.Pins), age, count(e.Committed), count(e.Failover), count(e.ErrorEvents)})
 	}
 	t.print(os.Stdout, lines, true)
 	fmt.Printf("\npins: %d   log rows dropped: %d   (COMMITTED, FAILOVER and ERROR EVENTS cover the last hour)\n", v.PinsTotal, v.LogDropped)

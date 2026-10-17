@@ -1,7 +1,7 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 
-// A quiet tag for secondary attributes (provider type, operation).
+// A quiet tag for secondary attributes (protocol, operation).
 function Badge({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span

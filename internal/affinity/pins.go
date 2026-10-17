@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"verbatim/internal/config"
 	"verbatim/internal/protocol"
 	"verbatim/internal/route"
 )
@@ -142,14 +143,16 @@ func (p *Pins) Len() int {
 	return p.lru.Len()
 }
 
-// ByProvider counts live pins per provider.
-func (p *Pins) ByProvider() map[string]int {
+// ByEndpoint counts live pins per endpoint, by config.EndpointName: the
+// pinned provider under the pin's protocol.
+func (p *Pins) ByEndpoint() map[string]int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prune(p.now())
 	out := make(map[string]int)
 	for e := p.lru.Front(); e != nil; e = e.Next() {
-		out[e.Value.(*pin).target.Provider]++
+		pn := e.Value.(*pin)
+		out[config.EndpointName(pn.target.Provider, string(pn.key.Protocol))]++
 	}
 	return out
 }

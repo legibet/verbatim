@@ -94,9 +94,10 @@ func switchable(status *atomic.Int32, body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { reply(int(status.Load()), body)(w, r) }
 }
 
-// prov renders one provider entry of the YAML configuration.
-func prov(name, typ, url string, extra ...string) string {
-	s := fmt.Sprintf("  %s:\n    type: %s\n    base_url: %s\n    key: key-%s\n", name, typ, url, name)
+// prov renders one provider entry of the YAML configuration, with a single
+// endpoint for protocol proto at url; extra lines go under the provider.
+func prov(name, proto, url string, extra ...string) string {
+	s := fmt.Sprintf("  %s:\n    key: key-%s\n    endpoints:\n      %s: {base_url: %q}\n", name, name, proto, url)
 	for _, e := range extra {
 		s += "    " + e + "\n"
 	}
@@ -733,7 +734,7 @@ func TestBreaker(t *testing.T) {
 			t.Fatalf("got %d", res.status)
 		}
 	}
-	if st := breakers.State("a"); st.State != "open" {
+	if st := breakers.State("a.chat"); st.State != "open" {
 		t.Fatalf("breaker after 2 failures: %+v", st)
 	}
 	res := g.post(t, "/v1/chat/completions", chatBody)
@@ -764,7 +765,7 @@ func TestBreaker(t *testing.T) {
 	if res := <-probe; res.body != `{"from":"a"}` {
 		t.Fatalf("probe got %s", res.body)
 	}
-	if st := breakers.State("a"); st.State != "closed" || st.Failures != 0 {
+	if st := breakers.State("a.chat"); st.State != "closed" || st.Failures != 0 {
 		t.Fatalf("breaker after a successful probe: %+v", st)
 	}
 	block.Store(false)
@@ -780,8 +781,8 @@ func TestBreakerIgnoresAuthAndNotFound(t *testing.T) {
 	for range 3 {
 		g.post(t, "/v1/chat/completions", chatBody)
 	}
-	if a.count() != 3 || g.h.breakers.State("a").State != "closed" {
-		t.Errorf("401 fed the breaker: a got %d, state %+v", a.count(), g.h.breakers.State("a"))
+	if a.count() != 3 || g.h.breakers.State("a.chat").State != "closed" {
+		t.Errorf("401 fed the breaker: a got %d, state %+v", a.count(), g.h.breakers.State("a.chat"))
 	}
 }
 
@@ -1007,7 +1008,7 @@ breaker:
 			t.Fatalf("count_tokens did not fail over: %s", res.body)
 		}
 	}
-	if st := g.h.breakers.State("a"); st.State != "closed" || st.Failures != 0 {
+	if st := g.h.breakers.State("a.anthropic"); st.State != "closed" || st.Failures != 0 {
 		t.Fatalf("count_tokens fed the breaker: %+v", st)
 	}
 
@@ -1015,7 +1016,7 @@ breaker:
 	aCreate.Store(529)
 	create()
 	aCreate.Store(200)
-	g.h.breakers.Success("a")
+	g.h.breakers.Success("a.anthropic")
 
 	aCount.Store(200)
 	res = count()
@@ -1077,7 +1078,7 @@ breaker:
 	if res := create(); gjson.Get(res.body, "from").Str != "b" {
 		t.Fatalf("create: %s", res.body)
 	}
-	g.h.breakers.Success("a")
+	g.h.breakers.Success("a.responses")
 
 	res := search("S")
 	if gjson.Get(res.body, "from").Str != "b" || b.last().path != "/v1/alpha/search" || b.last().header.Get("Authorization") != "Bearer key-b" {
@@ -1095,7 +1096,7 @@ breaker:
 	if res := search("S"); gjson.Get(res.body, "from").Str != "a" {
 		t.Fatalf("search did not fail over: %s", res.body)
 	}
-	if st := g.h.breakers.State("b"); st.State != "closed" || st.Failures != 0 {
+	if st := g.h.breakers.State("b.responses"); st.State != "closed" || st.Failures != 0 {
 		t.Fatalf("search fed the breaker: %+v", st)
 	}
 	aCreate.Store(200)
@@ -1195,8 +1196,8 @@ func TestRequestHeadersAndURL(t *testing.T) {
 providers:
 `+prov("chat", "chat", ups["chat"].URL+"/v1", "headers:", "  x-title: verbatim", "  openai-project: null")+
 		prov("anth", "anthropic", ups["anth"].URL+"/anthropic", "headers:", "  anthropic-beta: from-config")+
-		prov("anthbearer", "anthropic", ups["anthbearer"].URL, "auth: bearer")+
-		prov("open", "chat", ups["open"].URL, "auth: none")+`
+		fmt.Sprintf("  anthbearer:\n    key: key-anthbearer\n    endpoints:\n      anthropic: {base_url: %q, auth: bearer}\n", ups["anthbearer"].URL)+
+		fmt.Sprintf("  open:\n    endpoints:\n      chat: {base_url: %q, auth: none}\n", ups["open"].URL)+`
 routes:
   - model: c
     targets: [{provider: chat}]
@@ -1253,6 +1254,64 @@ routes:
 	got = ups["open"].last()
 	if got.query != "" || got.header.Get("Authorization") != "" || got.header.Get("X-Api-Key") != "" {
 		t.Errorf("auth none request: %s %v", got.query, got.header)
+	}
+}
+
+// One provider serving several protocols: a request goes to the endpoint
+// for its protocol with the provider's key and headers, each endpoint has its
+// own circuit breaker, and a "provider.protocol" target serves that protocol
+// alone.
+func TestProviderEndpoints(t *testing.T) {
+	chat := newUpstream(t, reply(500, `{"from":"chat"}`))
+	anth := newUpstream(t, reply(200, `{"from":"anthropic"}`))
+	g := newGateway(t, fmt.Sprintf(`providers:
+  p:
+    key: key-p
+    headers: {x-title: verbatim}
+    endpoints:
+      chat: {base_url: %q}
+      anthropic: {base_url: %q, auth: bearer}
+routes:
+  - model: only-anthropic
+    targets: [{provider: p.anthropic}]
+  - model: m
+    targets: [{provider: p}]
+breaker:
+  failure_threshold: 1
+`, chat.URL+"/v1", anth.URL)+noAffinity)
+
+	if res := g.post(t, "/v1/chat/completions", chatBody); res.status != 500 {
+		t.Fatalf("chat: got %d %s", res.status, res.body)
+	}
+	got := chat.last()
+	if got.path != "/v1/chat/completions" || got.header.Get("Authorization") != "Bearer key-p" || got.header.Get("X-Title") != "verbatim" {
+		t.Errorf("chat request: %s %v", got.path, got.header)
+	}
+	if st := g.h.breakers.State("p.chat"); st.State != "open" {
+		t.Fatalf("chat breaker: %+v", st)
+	}
+	if res := g.post(t, "/v1/chat/completions", chatBody); res.status != 502 || res.header.Get("X-Verbatim-Error") != "all_upstreams_open" {
+		t.Errorf("chat with its breaker open: got %d %s", res.status, res.body)
+	}
+
+	// The open chat breaker does not stop the anthropic endpoint.
+	res := g.post(t, "/v1/messages", `{"model":"m"}`)
+	if res.status != 200 || gjson.Get(res.body, "from").Str != "anthropic" {
+		t.Fatalf("anthropic: got %d %s", res.status, res.body)
+	}
+	got = anth.last()
+	if got.path != "/v1/messages" || got.header.Get("Authorization") != "Bearer key-p" || got.header.Get("X-Api-Key") != "" || got.header.Get("X-Title") != "verbatim" {
+		t.Errorf("anthropic request: %s %v", got.path, got.header)
+	}
+	if row := g.row(t, res.rid); deref(row.Provider) != "p" || row.Protocol != "anthropic" {
+		t.Errorf("row provider %v, protocol %s", deref(row.Provider), row.Protocol)
+	}
+
+	if res := g.post(t, "/v1/messages", `{"model":"only-anthropic"}`); res.status != 200 {
+		t.Errorf("endpoint target: got %d %s", res.status, res.body)
+	}
+	if res := g.post(t, "/v1/chat/completions", `{"model":"only-anthropic"}`); res.status != 404 || res.header.Get("X-Verbatim-Error") != "no_route" {
+		t.Errorf("endpoint target served another protocol: got %d %s", res.status, res.body)
 	}
 }
 
@@ -1495,7 +1554,7 @@ routes:
 	if res.status != 200 || row.Outcome != "upstream_error_event" || deref(row.InputTokens) != int64(3) {
 		t.Errorf("status %d, outcome %s, input %v", res.status, row.Outcome, deref(row.InputTokens))
 	}
-	if st := g.h.breakers.State("a"); st.Failures != 0 {
+	if st := g.h.breakers.State("a.anthropic"); st.Failures != 0 {
 		t.Errorf("error event fed the breaker: %+v", st)
 	}
 }
@@ -1559,7 +1618,7 @@ func TestStats(t *testing.T) {
 	g := newGateway(t, sessionTargets(a.URL, b.URL, "prefer"))
 	g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "S")
 	st := g.h.Stats()
-	if st.Breakers["a"].Failures != 1 || st.Pins["b"] != 1 || st.PinsTotal != 1 || st.LogDropped != 0 {
+	if st.Breakers["a.chat"].Failures != 1 || st.Pins["b.chat"] != 1 || st.PinsTotal != 1 || st.LogDropped != 0 {
 		t.Errorf("stats = %+v", st)
 	}
 }

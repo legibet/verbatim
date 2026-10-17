@@ -90,9 +90,9 @@ export type UsageView = {
   daily: Aggregate[]
 }
 
-export type ProviderView = {
-  name: string
-  type: string
+export type EndpointView = {
+  provider: string
+  protocol: string
   base_url: string
   breaker: { state: "closed" | "open" | "half_open"; failures: number; open_until: string | null }
   pins: number
@@ -102,7 +102,7 @@ export type ProviderView = {
   error_events: number
 }
 
-export type ProvidersView = { providers: ProviderView[]; log_dropped: number; pins_total: number }
+export type ProvidersView = { endpoints: EndpointView[]; log_dropped: number; pins_total: number }
 
 export type ConfigView = Record<string, unknown>
 
@@ -119,7 +119,7 @@ export const isRequestRow = (v: unknown): v is RequestRow =>
 export const isUsageView = (v: unknown): v is UsageView =>
   isObject(v) && Array.isArray(v.rows) && isObject(v.total) && Array.isArray(v.daily)
 export const isProvidersView = (v: unknown): v is ProvidersView =>
-  isObject(v) && Array.isArray(v.providers)
+  isObject(v) && Array.isArray(v.endpoints)
 export const isConfigView = (v: unknown): v is ConfigView => isObject(v)
 
 // Parsers for the JSON-string columns of a row (routing_json, attempt_log,

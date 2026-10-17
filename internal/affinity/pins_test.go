@@ -184,17 +184,18 @@ func TestPinsCommitAndRelease(t *testing.T) {
 	})
 }
 
-func TestPinsByProvider(t *testing.T) {
+func TestPinsByEndpoint(t *testing.T) {
 	p, c := newTestPins(time.Hour, 10)
 	p.Reserve(pk("1"), ta)
 	c.t = c.t.Add(30 * time.Minute)
 	p.Reserve(pk("2"), ta)
 	p.Reserve(pk("3"), tb)
-	if got := p.ByProvider(); !maps.Equal(got, map[string]int{"a": 2, "b": 1}) {
-		t.Fatalf("ByProvider = %v", got)
+	p.Reserve(PinKey{Protocol: protocol.Chat, Key: "4", Model: "claude"}, ta)
+	if got := p.ByEndpoint(); !maps.Equal(got, map[string]int{"a.anthropic": 2, "b.anthropic": 1, "a.chat": 1}) {
+		t.Fatalf("ByEndpoint = %v", got)
 	}
 	c.t = c.t.Add(45 * time.Minute) // pin 1 expires
-	if got := p.ByProvider(); !maps.Equal(got, map[string]int{"a": 1, "b": 1}) {
-		t.Fatalf("ByProvider after expiry = %v", got)
+	if got := p.ByEndpoint(); !maps.Equal(got, map[string]int{"a.anthropic": 1, "b.anthropic": 1, "a.chat": 1}) {
+		t.Fatalf("ByEndpoint after expiry = %v", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"testing"
 	"time"
@@ -334,7 +335,7 @@ func keys(rows []Aggregate) []string {
 	return out
 }
 
-func TestProviderStats(t *testing.T) {
+func TestEndpointStats(t *testing.T) {
 	s := openTest(t, 16)
 	seed(t, s)
 	// A client that went away before openai sent headers: openai was chosen
@@ -342,16 +343,18 @@ func TestProviderStats(t *testing.T) {
 	s.Record(rowSpec{at: 28 * time.Hour, proto: "chat", op: "create", model: "gpt-5.5", route: "gpt-*", provider: "openai",
 		status: 499, outcome: "client_cancelled", noUsage: true, noTTFB: true}.request(len(fixture)))
 	flush(t, s, len(fixture)+1)
-	got, err := s.ProviderStats(base.Add(time.Minute))
+	got, err := s.EndpointStats(base.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]ProviderStats{
-		"moonshot": {Committed: 2},
-		"openai":   {Committed: 2, ErrorEvents: 1},
-		"relay":    {Failover: 2},
+	// relay failed over once under chat and once under responses.
+	want := map[Endpoint]EndpointStats{
+		{"moonshot", "anthropic"}: {Committed: 2},
+		{"openai", "chat"}:        {Committed: 2, ErrorEvents: 1},
+		{"relay", "chat"}:         {Failover: 1},
+		{"relay", "responses"}:    {Failover: 1},
 	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
+	if !maps.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }

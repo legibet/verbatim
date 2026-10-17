@@ -346,62 +346,68 @@ func (s *Store) UnpricedModels(f UsageFilter) ([]ModelCount, error) {
 	return out, nil
 }
 
-// ProviderStats are the per-provider counters of the Providers view.
-type ProviderStats struct {
-	Committed   int64 // rows whose response headers came from this provider (ttfb_ms set)
-	Failover    int64 // attempts at this provider that were followed by another attempt
+// Endpoint is a provider serving one protocol.
+type Endpoint struct{ Provider, Protocol string }
+
+// EndpointStats are the per-endpoint counters of the Providers view.
+type EndpointStats struct {
+	Committed   int64 // rows whose response headers came from this endpoint (ttfb_ms set)
+	Failover    int64 // attempts at this endpoint that were followed by another attempt
 	ErrorEvents int64 // committed rows with outcome upstream_error_event
 }
 
-// ProviderStats counts, per provider, the requests since the given time.
-func (s *Store) ProviderStats(since time.Time) (map[string]ProviderStats, error) {
-	out := map[string]ProviderStats{}
+// EndpointStats counts, per endpoint, the requests since the given time. A
+// row's endpoints are its providers under its protocol.
+func (s *Store) EndpointStats(since time.Time) (map[Endpoint]EndpointStats, error) {
+	out := map[Endpoint]EndpointStats{}
 	ms := since.UnixMilli()
 
-	q, err := s.r.Query(`SELECT provider,
+	q, err := s.r.Query(`SELECT provider, protocol,
 			SUM(ttfb_ms IS NOT NULL),
 			SUM(outcome = 'upstream_error_event')
-		FROM requests WHERE ts >= ? AND provider IS NOT NULL GROUP BY provider`, ms)
+		FROM requests WHERE ts >= ? AND provider IS NOT NULL GROUP BY provider, protocol`, ms)
 	if err != nil {
-		return nil, fmt.Errorf("provider stats: %w", err)
+		return nil, fmt.Errorf("endpoint stats: %w", err)
 	}
 	defer q.Close()
 	for q.Next() {
-		var p string
-		var st ProviderStats
-		if err := q.Scan(&p, &st.Committed, &st.ErrorEvents); err != nil {
-			return nil, fmt.Errorf("provider stats: %w", err)
+		var e Endpoint
+		var st EndpointStats
+		if err := q.Scan(&e.Provider, &e.Protocol, &st.Committed, &st.ErrorEvents); err != nil {
+			return nil, fmt.Errorf("endpoint stats: %w", err)
 		}
-		out[p] = st
+		out[e] = st
 	}
 	if err := q.Err(); err != nil {
-		return nil, fmt.Errorf("provider stats: %w", err)
+		return nil, fmt.Errorf("endpoint stats: %w", err)
 	}
 
 	// Every attempt but the last one in attempt_log failed over to the next.
-	f, err := s.r.Query(`SELECT json_extract(a.value, '$.provider'), COUNT(*)
+	f, err := s.r.Query(`SELECT json_extract(a.value, '$.provider'), r.protocol, COUNT(*)
 		FROM requests r, json_each(r.attempt_log) a
 		WHERE r.ts >= ? AND json_valid(r.attempt_log) AND a.key < json_array_length(r.attempt_log) - 1
-		GROUP BY 1`, ms)
+		GROUP BY 1, 2`, ms)
 	if err != nil {
-		return nil, fmt.Errorf("provider failovers: %w", err)
+		return nil, fmt.Errorf("endpoint failovers: %w", err)
 	}
 	defer f.Close()
 	for f.Next() {
 		var p sql.NullString
+		var proto string
 		var n int64
-		if err := f.Scan(&p, &n); err != nil {
-			return nil, fmt.Errorf("provider failovers: %w", err)
+		if err := f.Scan(&p, &proto, &n); err != nil {
+			return nil, fmt.Errorf("endpoint failovers: %w", err)
 		}
 		if !p.Valid {
 			continue
 		}
-		st := out[p.String]
+		e := Endpoint{p.String, proto}
+		st := out[e]
 		st.Failover = n
-		out[p.String] = st
+		out[e] = st
 	}
 	if err := f.Err(); err != nil {
-		return nil, fmt.Errorf("provider failovers: %w", err)
+		return nil, fmt.Errorf("endpoint failovers: %w", err)
 	}
 	return out, nil
 }

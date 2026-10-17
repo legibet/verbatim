@@ -6,6 +6,8 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,21 +33,31 @@ type Server struct {
 	IdleTimeout   Duration `yaml:"idle_timeout"`   // default 120s
 }
 
-// Provider is one upstream endpoint speaking exactly one protocol.
+// Provider is one upstream service. It serves each protocol in Endpoints,
+// with one key, one set of headers, and one list of overrides for all.
 type Provider struct {
-	Type    string `yaml:"type"`     // chat | responses | anthropic | gemini | images
-	BaseURL string `yaml:"base_url"` // the base URL the protocol's official SDK takes
-	Key     string `yaml:"key"`
-	Auth    string `yaml:"auth"` // bearer | x-api-key | x-goog-api-key | none; Load fills the per-type default
-	// Headers are applied after client headers are copied and before Auth.
+	Key string `yaml:"key"`
+	// Headers are applied after client headers are copied and before auth.
 	// A nil value removes the header.
-	Headers   map[string]*string `yaml:"headers"`
-	Overrides []Override         `yaml:"overrides"` // not allowed on images providers
-	// HeaderTimeout bounds the wait for this provider's response headers;
+	Headers   map[string]*string  `yaml:"headers"`
+	Overrides []Override          `yaml:"overrides"` // not allowed with an images endpoint
+	Endpoints map[string]Endpoint `yaml:"endpoints"` // keyed by protocol id
+}
+
+// Endpoint is where a provider serves one protocol.
+type Endpoint struct {
+	BaseURL string `yaml:"base_url"` // the base URL the protocol's official SDK takes
+	Auth    string `yaml:"auth"`     // bearer | x-api-key | x-goog-api-key | none; Load fills the protocol's default
+	// HeaderTimeout bounds the wait for this endpoint's response headers;
 	// Load fills server.header_timeout. A non-streamed image is answered
 	// only once it is drawn.
 	HeaderTimeout Duration `yaml:"header_timeout"`
 }
+
+// EndpointName names a provider's endpoint for one protocol the way a
+// target names it, "provider.protocol". Circuit breakers and model lists
+// are kept per endpoint under this name.
+func EndpointName(provider, proto string) string { return provider + "." + proto }
 
 // Override is exactly one of Delete or Set.
 type Override struct {
@@ -66,10 +78,27 @@ type Route struct {
 }
 
 type Target struct {
-	Provider string `yaml:"provider"`
+	Provider string `yaml:"provider"` // a provider, or "provider.protocol" for one of its endpoints
 	Model    string `yaml:"model"`    // upstream model name; empty forwards the client's name
 	Priority int    `yaml:"priority"` // default 1, lower first
 	Weight   int    `yaml:"weight"`   // default 1
+}
+
+// Split returns the target's provider name and, when the target names a
+// single endpoint, that endpoint's protocol.
+func (t Target) Split() (provider, proto string) {
+	provider, proto, _ = strings.Cut(t.Provider, ".")
+	return provider, proto
+}
+
+// Protocols returns the protocols a target serves, sorted: the one its
+// endpoint names, or else every endpoint of its provider.
+func (c *Config) Protocols(t Target) []string {
+	provider, proto := t.Split()
+	if proto != "" {
+		return []string{proto}
+	}
+	return slices.Sorted(maps.Keys(c.Providers[provider].Endpoints))
 }
 
 type Affinity struct {

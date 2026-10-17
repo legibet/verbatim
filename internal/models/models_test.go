@@ -64,11 +64,14 @@ func TestNamesAndFetch(t *testing.T) {
 
 	cfg, _, err := config.Parse([]byte(fmt.Sprintf(`
 providers:
-  chat: {type: chat, base_url: %s, key: kc}
-  anth: {type: anthropic, base_url: %s, key: ka}
-  gem: {type: gemini, base_url: %s, key: kg}
-  rewrite: {type: chat, base_url: %s, key: kr, headers: {x-extra: "1", x-drop: null}}
-  unused: {type: chat, base_url: %s, key: ku}
+  multi:
+    key: km
+    endpoints:
+      chat: {base_url: %s}
+      anthropic: {base_url: %s}
+  gem: {key: kg, endpoints: {gemini: {base_url: %s}}}
+  rewrite: {key: kr, headers: {x-extra: "1", x-drop: null}, endpoints: {chat: {base_url: %s}}}
+  unused: {key: ku, endpoints: {chat: {base_url: %s}}}
 routes:
   - model: kimi-k3
     targets: [{provider: unused}]
@@ -76,35 +79,40 @@ routes:
     discover: false
     targets: [{provider: unused}]
   - model: "gpt-*"
-    targets: [{provider: chat}, {provider: rewrite, model: fixed}, {provider: anth}]
+    targets: [{provider: multi}, {provider: rewrite, model: fixed}]
   - model: "claude-*"
-    targets: [{provider: anth}, {provider: rewrite, model: fixed}]
+    targets: [{provider: multi.anthropic}, {provider: rewrite, model: fixed}]
   - model: "gemini-*"
     targets: [{provider: gem}]
   - model: "*"
     discover: false
-    targets: [{provider: chat}]
+    targets: [{provider: multi.chat}]
 `, chat.URL, anth.URL, gem.URL, rewrite.URL, unused.URL)), "test.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := New(cfg, nil, time.Minute, time.Second)
-	if want := []string{"anth", "chat", "gem"}; !slices.Equal(c.providers, want) {
-		t.Fatalf("providers to fetch = %v, want %v", c.providers, want)
+	var names []string
+	for _, e := range c.endpoints {
+		names = append(names, e.name())
+	}
+	if want := []string{"gem.gemini", "multi.anthropic", "multi.chat"}; !slices.Equal(names, want) {
+		t.Fatalf("endpoints to fetch = %v, want %v", names, want)
 	}
 	if got := c.Names(context.Background()); !slices.Equal(got, []string{"kimi-k3"}) {
 		t.Errorf("before any fetch: %v", got)
 	}
-	for _, name := range c.providers {
-		if err := c.refresh(context.Background(), name); err != nil {
-			t.Fatalf("%s: %v", name, err)
+	for _, e := range c.endpoints {
+		if err := c.refresh(context.Background(), e); err != nil {
+			t.Fatalf("%s: %v", e.name(), err)
 		}
 	}
 
+	// A provider target reads every endpoint's list, in protocol order:
+	// multi's anthropic list gives gpt-6 under gpt-*, its chat list gpt-5.
 	// gpt-4o belongs to the earlier gpt-4* route; o3 matches no pattern;
-	// anth's gpt-6 is listed under gpt-* because anth is a target there too;
 	// gemini ids lose their models/ prefix.
-	want := []string{"kimi-k3", "gpt-5", "gpt-6", "claude-a", "claude-b", "claude-c", "gemini-x"}
+	want := []string{"kimi-k3", "gpt-6", "gpt-5", "claude-a", "claude-b", "claude-c", "gemini-x"}
 	if got := c.Names(context.Background()); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
 	}
@@ -113,23 +121,23 @@ routes:
 	}
 
 	h := *chat.header.Load()
-	if h.Get("Authorization") != "Bearer kc" {
+	if h.Get("Authorization") != "Bearer km" {
 		t.Errorf("chat auth: %v", h)
 	}
 	h = *anth.header.Load()
-	if h.Get("X-Api-Key") != "ka" || h.Get("Anthropic-Version") != "2023-06-01" || h.Get("Authorization") != "" {
+	if h.Get("X-Api-Key") != "km" || h.Get("Anthropic-Version") != "2023-06-01" || h.Get("Authorization") != "" {
 		t.Errorf("anthropic headers: %v", h)
 	}
 	if h := *gem.header.Load(); h.Get("X-Goog-Api-Key") != "kg" {
 		t.Errorf("gemini headers: %v", h)
 	}
-	if ages := c.Ages(); len(ages) != 3 || ages["chat"] < 0 || ages["chat"] > time.Minute {
+	if ages := c.Ages(); len(ages) != 3 || ages["multi.chat"] < 0 || ages["multi.chat"] > time.Minute {
 		t.Errorf("Ages() = %v", ages)
 	}
 
 	// A failed refresh keeps the previous list.
 	chat.fail.Store(true)
-	if err := c.refresh(context.Background(), "chat"); err == nil {
+	if err := c.refresh(context.Background(), endpoint{"multi", "chat"}); err == nil {
 		t.Error("refresh of a failing provider succeeded")
 	}
 	if got := c.Names(context.Background()); !slices.Equal(got, want) {
@@ -141,7 +149,7 @@ func TestStartWarms(t *testing.T) {
 	p := newProvider(t, map[string]string{"": openai("m-1")})
 	cfg, _, err := config.Parse([]byte(fmt.Sprintf(`
 providers:
-  p: {type: chat, base_url: %s, key: k}
+  p: {key: k, endpoints: {chat: {base_url: %s}}}
 routes:
   - model: "m-*"
     targets: [{provider: p}]
@@ -177,7 +185,7 @@ func TestFetchDecompresses(t *testing.T) {
 	t.Cleanup(p.Close)
 	cfg, _, err := config.Parse([]byte(fmt.Sprintf(`
 providers:
-  p: {type: chat, base_url: %s, key: k, headers: {Accept-Encoding: gzip}}
+  p: {key: k, headers: {Accept-Encoding: gzip}, endpoints: {chat: {base_url: %s}}}
 routes:
   - model: "m-*"
     targets: [{provider: p}]
@@ -186,7 +194,7 @@ routes:
 		t.Fatal(err)
 	}
 	c := New(cfg, nil, time.Minute, time.Second)
-	if err := c.refresh(context.Background(), "p"); err != nil {
+	if err := c.refresh(context.Background(), endpoint{"p", "chat"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.Names(context.Background()); !slices.Equal(got, []string{"m-1", "m-2"}) {
@@ -200,12 +208,12 @@ routes:
 func TestAuthorize(t *testing.T) {
 	v := "set"
 	h := http.Header{"X-Drop": {"1"}, "Authorization": {"Bearer client"}}
-	Authorize(h, config.Provider{Auth: "x-api-key", Key: "k", Headers: map[string]*string{"x-drop": nil, "x-api-key": &v, "x-new": &v}})
+	Authorize(h, config.Provider{Key: "k", Headers: map[string]*string{"x-drop": nil, "x-api-key": &v, "x-new": &v}}, config.Endpoint{Auth: "x-api-key"})
 	if h.Get("X-Drop") != "" || h.Get("X-New") != "set" || h.Get("X-Api-Key") != "k" {
 		t.Errorf("headers = %v", h)
 	}
 	h = http.Header{}
-	Authorize(h, config.Provider{Auth: "none", Key: "k"})
+	Authorize(h, config.Provider{Key: "k"}, config.Endpoint{Auth: "none"})
 	if len(h) != 0 {
 		t.Errorf("auth none set %v", h)
 	}

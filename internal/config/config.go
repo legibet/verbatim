@@ -337,6 +337,9 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// protocols are the protocol ids, which name endpoints and affinity matches.
+var protocols = []string{"chat", "responses", "anthropic", "gemini", "images"}
+
 func (c *checker) providers(cfg *Config) {
 	if len(cfg.Providers) == 0 {
 		c.errorf("providers", "at least one provider is required")
@@ -344,51 +347,12 @@ func (c *checker) providers(cfg *Config) {
 	for _, name := range slices.Sorted(maps.Keys(cfg.Providers)) {
 		p := cfg.Providers[name]
 		path := "providers." + name
-
-		var auth string
-		switch p.Type {
-		case "chat", "responses", "images":
-			auth = "bearer"
-		case "anthropic":
-			auth = "x-api-key"
-		case "gemini":
-			auth = "x-goog-api-key"
-		default:
-			c.errorf(path+".type", "must be one of chat, responses, anthropic, gemini, images, got %q", p.Type)
-		}
-		if p.Auth == "" {
-			p.Auth = auth
-		}
-		switch p.Auth {
-		case "bearer", "x-api-key", "x-goog-api-key":
-			if p.Key == "" {
-				c.errorf(path+".key", "required unless auth is none")
-			}
-		case "none":
-			if p.Key != "" {
-				c.warnf(path+".key", "ignored because auth is none")
-			}
-		case "":
-			// Unknown type, already reported.
-		default:
-			c.errorf(path+".auth", "must be one of bearer, x-api-key, x-goog-api-key, none, got %q", p.Auth)
+		if strings.Contains(name, ".") {
+			c.errorf(path, `a provider name cannot contain ".", which separates provider and protocol in a target`)
 		}
 		if !isFieldValue(p.Key) {
 			c.errorf(path+".key", "contains a control character")
 		}
-
-		u, err := url.Parse(p.BaseURL)
-		switch {
-		case p.BaseURL == "":
-			c.errorf(path+".base_url", "required")
-		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
-			c.errorf(path+".base_url", "must be an absolute http or https URL")
-		case strings.ContainsAny(p.BaseURL, "?#"):
-			c.errorf(path+".base_url", "must not contain a query string or fragment")
-		}
-		// Operation suffixes start with "/", so a trailing slash would double it.
-		p.BaseURL = strings.TrimRight(p.BaseURL, "/")
-
 		for _, h := range slices.Sorted(maps.Keys(p.Headers)) {
 			hpath := path + ".headers." + h
 			switch {
@@ -403,22 +367,73 @@ func (c *checker) providers(cfg *Config) {
 			}
 		}
 
+		if len(p.Endpoints) == 0 {
+			c.errorf(path+".endpoints", "at least one endpoint is required")
+		}
+		usesKey := false
+		for _, proto := range slices.Sorted(maps.Keys(p.Endpoints)) {
+			e := p.Endpoints[proto]
+			epath := path + ".endpoints." + proto
+			var auth string
+			switch proto {
+			case "chat", "responses", "images":
+				auth = "bearer"
+			case "anthropic":
+				auth = "x-api-key"
+			case "gemini":
+				auth = "x-goog-api-key"
+			default:
+				c.errorf(epath, "unknown protocol; must be one of %s", strings.Join(protocols, ", "))
+			}
+			if e.Auth == "" {
+				e.Auth = auth
+			}
+			switch e.Auth {
+			case "bearer", "x-api-key", "x-goog-api-key":
+				usesKey = true
+			case "none", "":
+				// "" is an unknown protocol, already reported.
+			default:
+				c.errorf(epath+".auth", "must be one of bearer, x-api-key, x-goog-api-key, none, got %q", e.Auth)
+			}
+
+			u, err := url.Parse(e.BaseURL)
+			switch {
+			case e.BaseURL == "":
+				c.errorf(epath+".base_url", "required")
+			case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+				c.errorf(epath+".base_url", "must be an absolute http or https URL")
+			case strings.ContainsAny(e.BaseURL, "?#"):
+				c.errorf(epath+".base_url", "must not contain a query string or fragment")
+			}
+			// Operation suffixes start with "/", so a trailing slash would double it.
+			e.BaseURL = strings.TrimRight(e.BaseURL, "/")
+
+			switch {
+			case e.HeaderTimeout < 0:
+				c.errorf(epath+".header_timeout", "must be greater than 0")
+			case e.HeaderTimeout == 0:
+				e.HeaderTimeout = cfg.Server.HeaderTimeout
+			}
+			p.Endpoints[proto] = e
+		}
 		switch {
-		case p.HeaderTimeout < 0:
-			c.errorf(path+".header_timeout", "must be greater than 0")
-		case p.HeaderTimeout == 0:
-			p.HeaderTimeout = cfg.Server.HeaderTimeout
+		case usesKey && p.Key == "":
+			c.errorf(path+".key", "required unless every endpoint's auth is none")
+		case !usesKey && p.Key != "" && len(p.Endpoints) > 0:
+			c.warnf(path+".key", "ignored because every endpoint's auth is none")
 		}
 
-		if p.Type == "images" && len(p.Overrides) > 0 {
-			c.errorf(path+".overrides", "not supported on an images provider: overrides edit JSON, and an images request may be multipart")
+		_, images := p.Endpoints["images"]
+		if images && len(p.Overrides) > 0 {
+			c.errorf(path+".overrides", "not supported on a provider with an images endpoint: overrides edit JSON, and an images request may be multipart; give the images endpoint a provider of its own")
 		}
-		c.overrides(path, p.Type, p.Overrides)
-		cfg.Providers[name] = p
+		_, anthropic := p.Endpoints["anthropic"]
+		c.overrides(path, anthropic, p.Overrides)
 	}
 }
 
-func (c *checker) overrides(path, typ string, ops []Override) {
+func (c *checker) overrides(path string, anthropic bool, ops []Override) {
 	var seen [][]string // key segments per override, nil when invalid
 	for i, o := range ops {
 		opath := fmt.Sprintf("%s.overrides[%d]", path, i)
@@ -446,8 +461,8 @@ func (c *checker) overrides(path, typ string, ops []Override) {
 		if slices.Contains(segs, "model") || slices.Contains(segs, "stream") {
 			c.errorf(field, "%q: model and stream cannot be overridden; they drive routing and usage parsing", target)
 		}
-		if typ == "anthropic" && slices.Contains([]string{"system", "tools", "messages"}, segs[0]) {
-			c.errorf(field, "%q: system, tools and messages cannot be overridden on an anthropic provider; it would change the preserved-thinking prefix", target)
+		if anthropic && slices.Contains([]string{"system", "tools", "messages"}, segs[0]) {
+			c.errorf(field, "%q: system, tools and messages cannot be overridden on a provider with an anthropic endpoint; it would change the preserved-thinking prefix", target)
 		}
 		for j, prev := range seen[:i] {
 			if prev != nil && (hasPrefix(prev, segs) || hasPrefix(segs, prev)) {
@@ -579,14 +594,24 @@ func (c *checker) routes(cfg *Config) {
 		if len(r.Targets) == 0 {
 			c.errorf(path+".targets", "at least one target is required")
 		}
-		type identity struct{ provider, model string }
+		// Two targets are the same when they send one model to one
+		// endpoint: same provider, model, and protocol.
+		type identity struct{ provider, model, proto string }
 		firstTarget := map[identity]int{}
 		for j, t := range r.Targets {
 			tpath := fmt.Sprintf("%s.targets[%d]", path, j)
-			if t.Provider == "" {
+			name, proto := t.Split()
+			p, ok := cfg.Providers[name]
+			_, served := p.Endpoints[proto]
+			switch {
+			case t.Provider == "":
 				c.errorf(tpath+".provider", "required")
-			} else if _, ok := cfg.Providers[t.Provider]; !ok {
-				c.errorf(tpath+".provider", "%q is not defined in providers", t.Provider)
+			case !ok:
+				c.errorf(tpath+".provider", "%q is not defined in providers", name)
+			case proto == "" && name != t.Provider:
+				c.errorf(tpath+".provider", "%q: a protocol must follow the \".\"", t.Provider)
+			case proto != "" && !served:
+				c.errorf(tpath+".provider", "provider %q has no %q endpoint", name, proto)
 			}
 			if t.Priority < 1 {
 				c.errorf(tpath+".priority", "must be at least 1")
@@ -596,13 +621,16 @@ func (c *checker) routes(cfg *Config) {
 			}
 			// On an exact-name route an absent model forwards the client's
 			// name, which is the route name.
-			id := identity{t.Provider, t.Model}
-			if id.model == "" && IsExact(r.Model) {
-				id.model = r.Model
+			model := t.Model
+			if model == "" && IsExact(r.Model) {
+				model = r.Model
 			}
-			if k, dup := firstTarget[id]; dup {
-				c.errorf(tpath, "duplicates targets[%d] (same provider and model)", k)
-			} else {
+			for _, proto := range cfg.Protocols(t) {
+				id := identity{name, model, proto}
+				if k, dup := firstTarget[id]; dup {
+					c.errorf(tpath, "duplicates targets[%d] (same provider, model and protocol %s)", k, proto)
+					break
+				}
 				firstTarget[id] = j
 			}
 		}
@@ -637,8 +665,8 @@ func (c *checker) routes(cfg *Config) {
 func routeProtocols(cfg *Config, r Route) map[string]bool {
 	set := map[string]bool{}
 	for _, t := range r.Targets {
-		if p, ok := cfg.Providers[t.Provider]; ok {
-			set[p.Type] = true
+		for _, proto := range cfg.Protocols(t) {
+			set[proto] = true
 		}
 	}
 	return set
@@ -657,10 +685,8 @@ func (c *checker) affinity(cfg *Config) {
 	}
 	for i, r := range a.Rules {
 		path := fmt.Sprintf("affinity.rules[%d]", i)
-		switch r.Match.Protocol {
-		case "", "chat", "responses", "anthropic", "gemini", "images":
-		default:
-			c.errorf(path+".match.protocol", "must be one of chat, responses, anthropic, gemini, images, got %q", r.Match.Protocol)
+		if r.Match.Protocol != "" && !slices.Contains(protocols, r.Match.Protocol) {
+			c.errorf(path+".match.protocol", "must be one of %s, got %q", strings.Join(protocols, ", "), r.Match.Protocol)
 		}
 		if len(r.Key) == 0 {
 			c.errorf(path+".key", "at least one key source is required")
@@ -738,8 +764,8 @@ func (c *checker) rest(cfg *Config) {
 
 // Redacted returns a deep copy for display with secrets replaced by "***":
 // server.api_key, every provider key, every non-nil headers value, and any
-// userinfo or query in base_url. Override set values are shared with c; they
-// are read-only after Load.
+// userinfo or query in each endpoint's base_url. Override set values are
+// shared with c; they are read-only after Load.
 func (c *Config) Redacted() *Config {
 	const mask = "***"
 	r := *c
@@ -752,12 +778,17 @@ func (c *Config) Redacted() *Config {
 		if p.Key != "" {
 			p.Key = mask
 		}
-		if u, err := url.Parse(p.BaseURL); err == nil {
-			u.User, u.RawQuery, u.ForceQuery = nil, "", false
-			p.BaseURL = u.String()
-		} else {
-			p.BaseURL = mask
+		eps := make(map[string]Endpoint, len(p.Endpoints))
+		for proto, e := range p.Endpoints {
+			if u, err := url.Parse(e.BaseURL); err == nil {
+				u.User, u.RawQuery, u.ForceQuery = nil, "", false
+				e.BaseURL = u.String()
+			} else {
+				e.BaseURL = mask
+			}
+			eps[proto] = e
 		}
+		p.Endpoints = eps
 		if p.Headers != nil {
 			h := make(map[string]*string, len(p.Headers))
 			for k, v := range p.Headers {

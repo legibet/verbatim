@@ -1,5 +1,5 @@
 // Package route matches client model names to routes, orders a route's
-// targets into an attempt list, and keeps the per-provider circuit breakers.
+// targets into an attempt list, and keeps the per-endpoint circuit breakers.
 package route
 
 import (
@@ -40,9 +40,11 @@ type tableRoute struct {
 	targets []tableTarget
 }
 
+// tableTarget is a configured target for one protocol it serves.
 type tableTarget struct {
-	config.Target
-	proto protocol.ID
+	provider, model  string
+	priority, weight int
+	proto            protocol.ID
 }
 
 // rrKey identifies one round-robin counter: per route, protocol, and tier.
@@ -62,7 +64,10 @@ func New(cfg *config.Config) *Table {
 	for _, r := range cfg.Routes {
 		tr := tableRoute{pattern: r.Model}
 		for _, tg := range r.Targets {
-			tr.targets = append(tr.targets, tableTarget{Target: tg, proto: protocol.ID(cfg.Providers[tg.Provider].Type)})
+			provider, _ := tg.Split()
+			for _, proto := range cfg.Protocols(tg) {
+				tr.targets = append(tr.targets, tableTarget{provider, tg.Model, tg.Priority, tg.Weight, protocol.ID(proto)})
+			}
 		}
 		t.routes = append(t.routes, tr)
 		t.balance[r.Model] = r.Balance
@@ -71,7 +76,7 @@ func New(cfg *config.Config) *Table {
 }
 
 // Match finds the first route whose pattern matches clientModel and that has
-// at least one target whose provider speaks proto (design 6.3). The
+// at least one target that serves proto (design 6.3). The
 // candidates are that route's targets filtered to proto, in configuration
 // order, with Model resolved to the target's model or clientModel.
 func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cands []Candidate, ok bool) {
@@ -83,11 +88,10 @@ func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cand
 			if tg.proto != proto {
 				continue
 			}
-			model := cmp.Or(tg.Model, clientModel)
 			cands = append(cands, Candidate{
-				TargetID: TargetID{Provider: tg.Provider, Model: model},
-				Priority: tg.Priority,
-				Weight:   tg.Weight,
+				TargetID: TargetID{Provider: tg.provider, Model: cmp.Or(tg.model, clientModel)},
+				Priority: tg.priority,
+				Weight:   tg.weight,
 			})
 		}
 		if len(cands) > 0 {

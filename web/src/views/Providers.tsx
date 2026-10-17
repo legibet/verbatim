@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { isConfigView, isProvidersView, useApi, type ProviderView } from "@/api"
+import { isConfigView, isProvidersView, useApi, type EndpointView } from "@/api"
 import { Dash, ErrorLine, Mark, SectionTitle } from "@/common"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
 
 export function Providers() {
   const { data, error, reload } = useApi("providers", isProvidersView, 5000)
-  const now = useNow(data?.providers.some((p) => p.breaker.open_until) ?? false)
+  const now = useNow(data?.endpoints.some((e) => e.breaker.open_until) ?? false)
 
   if (error) return <ErrorLine error={error} onRetry={reload} />
   if (!data)
@@ -38,7 +38,7 @@ export function Providers() {
               </>
             )}
           </span>
-          <span className="text-muted-foreground">Counts cover the last hour. Refreshes every 5 s.</span>
+          <span className="text-muted-foreground">One row per provider endpoint. Counts cover the last hour. Refreshes every 5 s.</span>
         </div>
         <div className="overflow-x-auto rounded-lg border">
           <Table>
@@ -55,31 +55,31 @@ export function Providers() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.providers.map((p) => (
-                <TableRow key={p.name}>
+              {data.endpoints.map((e) => (
+                <TableRow key={`${e.provider}.${e.protocol}`}>
                   <TableCell>
                     <span className="inline-flex items-center gap-2">
-                      <span className="font-medium">{p.name}</span>
-                      <Badge>{p.type}</Badge>
+                      <span className="font-medium">{e.provider}</span>
+                      <Badge>{e.protocol}</Badge>
                     </span>
-                    <div className="font-mono text-[11.5px] text-muted-foreground">{p.base_url}</div>
+                    <div className="font-mono text-[11.5px] text-muted-foreground">{e.base_url}</div>
                   </TableCell>
                   <TableCell>
-                    <Breaker b={p.breaker} now={now} />
+                    <Breaker b={e.breaker} now={now} />
                   </TableCell>
-                  <TableCell className={cn("num text-right", p.breaker.failures > 0 && "text-warn-ink")}>
-                    {p.breaker.failures || <Dash />}
+                  <TableCell className={cn("num text-right", e.breaker.failures > 0 && "text-warn-ink")}>
+                    {e.breaker.failures || <Dash />}
                   </TableCell>
-                  <TableCell className="num text-right">{p.pins || <Dash />}</TableCell>
+                  <TableCell className="num text-right">{e.pins || <Dash />}</TableCell>
                   <TableCell className="num text-right">
-                    {p.models_age_s === null ? <span className="text-faint">never fetched</span> : fmtAge(p.models_age_s)}
+                    {e.models_age_s === null ? <span className="text-faint">never fetched</span> : fmtAge(e.models_age_s)}
                   </TableCell>
-                  <TableCell className="num text-right">{p.committed ? fmtInt(p.committed) : <Dash />}</TableCell>
-                  <TableCell className={cn("num text-right", p.failover > 0 && "text-warn-ink")}>
-                    {p.failover ? fmtInt(p.failover) : <Dash />}
+                  <TableCell className="num text-right">{e.committed ? fmtInt(e.committed) : <Dash />}</TableCell>
+                  <TableCell className={cn("num text-right", e.failover > 0 && "text-warn-ink")}>
+                    {e.failover ? fmtInt(e.failover) : <Dash />}
                   </TableCell>
-                  <TableCell className={cn("num text-right", p.error_events > 0 && "text-err-ink")}>
-                    {p.error_events ? fmtInt(p.error_events) : <Dash />}
+                  <TableCell className={cn("num text-right", e.error_events > 0 && "text-err-ink")}>
+                    {e.error_events ? fmtInt(e.error_events) : <Dash />}
                   </TableCell>
                 </TableRow>
               ))}
@@ -93,7 +93,7 @@ export function Providers() {
   )
 }
 
-function Breaker({ b, now }: { b: ProviderView["breaker"]; now: number }) {
+function Breaker({ b, now }: { b: EndpointView["breaker"]; now: number }) {
   if (b.state === "open") {
     const until = b.open_until ? new Date(b.open_until) : null
     const left = until ? Math.max(0, Math.ceil((until.getTime() - now) / 1000)) : null

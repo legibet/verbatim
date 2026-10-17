@@ -21,20 +21,20 @@ server:
   api_key: secret-key
 providers:
   alpha:
-    type: anthropic
-    base_url: https://user:pass@alpha.example/anthropic
     key: alpha-key
     headers:
       x-title: hidden-value
       x-drop: null
+    endpoints:
+      anthropic: {base_url: "https://user:pass@alpha.example/anthropic"}
+      chat: {base_url: "https://alpha.example/v1"}
   beta:
-    type: chat
-    base_url: https://beta.example/v1
     key: beta-key
+    endpoints:
+      chat: {base_url: "https://beta.example/v1"}
   gamma:
-    type: responses
-    base_url: http://127.0.0.1:9000/v1
-    auth: none
+    endpoints:
+      responses: {base_url: "http://127.0.0.1:9000/v1", auth: none}
 routes:
   - model: "*"
     targets:
@@ -341,33 +341,40 @@ func TestProviders(t *testing.T) {
 	openUntil := time.Now().Add(20 * time.Second).Truncate(time.Second)
 	h := newServer(t, "", proxy.Stats{
 		Breakers: map[string]route.State{
-			"alpha": {State: "open", Failures: 3, OpenUntil: openUntil},
-			"beta":  {State: "closed", Failures: 1},
+			"alpha.anthropic": {State: "open", Failures: 3, OpenUntil: openUntil},
+			"beta.chat":       {State: "closed", Failures: 1},
 		},
-		Pins:       map[string]int{"alpha": 4},
+		Pins:       map[string]int{"alpha.anthropic": 4},
 		PinsTotal:  4,
-		ModelsAge:  map[string]time.Duration{"beta": 90 * time.Second},
+		ModelsAge:  map[string]time.Duration{"beta.chat": 90 * time.Second},
 		LogDropped: 7,
 	})
 	rec := get(t, h, "/ui/api/providers", "")
 	v := decode[ProvidersView](t, rec)
-	if v.LogDropped != 7 || v.PinsTotal != 4 || len(v.Providers) != 3 {
+	if v.LogDropped != 7 || v.PinsTotal != 4 || len(v.Endpoints) != 4 {
 		t.Fatalf("%+v", v)
 	}
-	alpha, beta, gamma := v.Providers[0], v.Providers[1], v.Providers[2]
-	if alpha.Name != "alpha" || alpha.Breaker.State != "open" || alpha.Breaker.OpenUntil == nil || !alpha.Breaker.OpenUntil.Equal(openUntil) ||
-		alpha.Pins != 4 || alpha.Committed != 3 || alpha.Failover != 1 || alpha.ErrorEvents != 1 || alpha.ModelsAgeS != nil {
-		t.Errorf("alpha %+v", alpha)
+	alphaAnth, alphaChat, beta, gamma := v.Endpoints[0], v.Endpoints[1], v.Endpoints[2], v.Endpoints[3]
+	if alphaAnth.Provider != "alpha" || alphaAnth.Protocol != "anthropic" || alphaAnth.Breaker.State != "open" ||
+		alphaAnth.Breaker.OpenUntil == nil || !alphaAnth.Breaker.OpenUntil.Equal(openUntil) ||
+		alphaAnth.Pins != 4 || alphaAnth.Committed != 3 || alphaAnth.Failover != 0 || alphaAnth.ErrorEvents != 1 || alphaAnth.ModelsAgeS != nil {
+		t.Errorf("alpha anthropic %+v", alphaAnth)
 	}
-	if alpha.BaseURL != "https://alpha.example/anthropic" {
-		t.Errorf("alpha base_url %q not redacted", alpha.BaseURL)
+	if alphaAnth.BaseURL != "https://alpha.example/anthropic" {
+		t.Errorf("alpha base_url %q not redacted", alphaAnth.BaseURL)
+	}
+	// alpha's chat endpoint failed over once and is counted apart from its
+	// anthropic endpoint.
+	if alphaChat.Provider != "alpha" || alphaChat.Protocol != "chat" || alphaChat.Breaker.State != "closed" ||
+		alphaChat.Failover != 1 || alphaChat.Committed != 0 || alphaChat.Pins != 0 {
+		t.Errorf("alpha chat %+v", alphaChat)
 	}
 	if beta.Breaker.State != "closed" || beta.Breaker.Failures != 1 || beta.Breaker.OpenUntil != nil ||
 		beta.ModelsAgeS == nil || *beta.ModelsAgeS != 90 || beta.Committed != 2 || beta.Failover != 0 {
 		t.Errorf("beta %+v", beta)
 	}
-	// A provider with no live state at all still appears.
-	if gamma.Name != "gamma" || gamma.Type != "responses" || gamma.Breaker.State != "closed" || gamma.Pins != 0 || gamma.ModelsAgeS != nil || gamma.Committed != 0 {
+	// An endpoint with no live state at all still appears.
+	if gamma.Provider != "gamma" || gamma.Protocol != "responses" || gamma.Breaker.State != "closed" || gamma.Pins != 0 || gamma.ModelsAgeS != nil || gamma.Committed != 0 {
 		t.Errorf("gamma %+v", gamma)
 	}
 	if !strings.Contains(rec.Body.String(), `"models_age_s":null`) || !strings.Contains(rec.Body.String(), `"open_until":null`) {
