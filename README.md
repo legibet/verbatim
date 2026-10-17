@@ -93,7 +93,7 @@ See `verbatim.example.yaml`. The sections:
 |---|---|
 | `server` | Listen address, client API key, body and concurrency limits, upstream timeouts |
 | `providers` | One upstream service per entry: `key`, optional `headers` and `overrides`, and `endpoints`, a map from protocol to `base_url`, optional `auth` and `header_timeout` |
-| `routes` | Ordered list of `model` glob → `targets` (`provider` or `provider.protocol`, optional upstream `model`, `priority`, `weight`) |
+| `routes` | Ordered list of `model` glob → `targets` (`provider` or `provider.protocol`, optional upstream `model`, in which a `*` is what the route's `*` matched, `priority`, `weight`) |
 | `affinity` | Session key rules per protocol, fallback, TTL, `prefer` or `strict` mode |
 | `breaker` | Failure threshold and cooldown |
 | `models` | Model-list cache TTL and fetch timeout |

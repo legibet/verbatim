@@ -120,6 +120,8 @@ providers:
 #
 # `model` is a glob: * matches any run of characters, including "/". Put exact
 # names first, patterns after, "*" last. Each route's pattern must be unique.
+# A target's `model` is the upstream name; it may use one * when the route's
+# pattern has exactly one, and that * is replaced with what the route's * matched.
 # ---------------------------------------------------------------------------
 routes:
   # Exact name, several upstreams, several protocols. Which target is used
@@ -129,8 +131,8 @@ routes:
       - provider: moonshot                      # Anthropic clients (Claude Code) and
         weight: 3                               # chat clients: 3 of 4 chat requests here...
       - provider: relay.chat                    # ...and 1 of 4 here, as "kimi-k3-0905"
-        model: kimi-k3-0905                     # upstream model name (literal; default:
-                                                # the client's name unchanged)
+        model: kimi-k3-0905                     # upstream model name (default: the
+                                                # client's name unchanged)
       - provider: openrouter.anthropic          # tried only when every priority-1
         model: moonshotai/kimi-k3               # target failed or is circuit-open
         priority: 2
@@ -143,6 +145,9 @@ routes:
   - model: gpt-*
     targets:
       - provider: openai                        # responses, chat, and images (gpt-image-*)
+      - provider: openrouter.chat               # when OpenAI's chat endpoint fails. A *
+        model: openai/gpt-*                     # in model is what the route's * matched:
+        priority: 2                             # gpt-6.1-sol is sent as openai/gpt-6.1-sol
 
   - model: qwen/*                               # open-weight models on OpenRouter,
     targets:                                    # with the quantization filter

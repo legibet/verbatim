@@ -79,7 +79,7 @@ type Route struct {
 
 type Target struct {
 	Provider string `yaml:"provider"` // a provider, or "provider.protocol" for one of its endpoints
-	Model    string `yaml:"model"`    // upstream model name; empty forwards the client's name
+	Model    string `yaml:"model"`    // upstream model name; empty forwards the client's name; a '*' is what the route's '*' matched
 	Priority int    `yaml:"priority"` // default 1, lower first
 	Weight   int    `yaml:"weight"`   // default 1
 }

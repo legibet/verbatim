@@ -59,6 +59,7 @@ func TestNamesAndFetch(t *testing.T) {
 		"claude-b": `{"data":[{"id":"claude-c"},{"id":"gpt-6"}],"has_more":false,"last_id":"gpt-6"}`,
 	})
 	gem := newProvider(t, map[string]string{"": `{"models":[{"name":"models/gemini-x"},{"name":"models/other"}]}`})
+	prefixed := newProvider(t, map[string]string{"": openai("openai/gpt-7", "openai/gpt-5", "openai/gpt-4x", "openai/o3", "other/gpt-8")})
 	rewrite := newProvider(t, nil) // must never be asked
 	unused := newProvider(t, nil)
 
@@ -70,6 +71,7 @@ providers:
       chat: {base_url: %s}
       anthropic: {base_url: %s}
   gem: {key: kg, endpoints: {gemini: {base_url: %s}}}
+  prefixed: {key: kp, endpoints: {chat: {base_url: %s}}}
   rewrite: {key: kr, headers: {x-extra: "1", x-drop: null}, endpoints: {chat: {base_url: %s}}}
   unused: {key: ku, endpoints: {chat: {base_url: %s}}}
 routes:
@@ -79,7 +81,7 @@ routes:
     discover: false
     targets: [{provider: unused}]
   - model: "gpt-*"
-    targets: [{provider: multi}, {provider: rewrite, model: fixed}]
+    targets: [{provider: multi}, {provider: prefixed, model: "openai/gpt-*"}, {provider: rewrite, model: fixed}]
   - model: "claude-*"
     targets: [{provider: multi.anthropic}, {provider: rewrite, model: fixed}]
   - model: "gemini-*"
@@ -87,7 +89,7 @@ routes:
   - model: "*"
     discover: false
     targets: [{provider: multi.chat}]
-`, chat.URL, anth.URL, gem.URL, rewrite.URL, unused.URL)), "test.yaml")
+`, chat.URL, anth.URL, gem.URL, prefixed.URL, rewrite.URL, unused.URL)), "test.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ routes:
 	for _, e := range c.endpoints {
 		names = append(names, e.name())
 	}
-	if want := []string{"gem.gemini", "multi.anthropic", "multi.chat"}; !slices.Equal(names, want) {
+	if want := []string{"gem.gemini", "multi.anthropic", "multi.chat", "prefixed.chat"}; !slices.Equal(names, want) {
 		t.Fatalf("endpoints to fetch = %v, want %v", names, want)
 	}
 	if got := c.Names(context.Background()); !slices.Equal(got, []string{"kimi-k3"}) {
@@ -111,8 +113,10 @@ routes:
 	// A provider target reads every endpoint's list, in protocol order:
 	// multi's anthropic list gives gpt-6 under gpt-*, its chat list gpt-5.
 	// gpt-4o belongs to the earlier gpt-4* route; o3 matches no pattern;
+	// prefixed's ids map back through openai/gpt-* to gpt-7 and gpt-5 (already
+	// listed) and gpt-4x (owned by gpt-4*); the others do not match it.
 	// gemini ids lose their models/ prefix.
-	want := []string{"kimi-k3", "gpt-6", "gpt-5", "claude-a", "claude-b", "claude-c", "gemini-x"}
+	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c", "gemini-x"}
 	if got := c.Names(context.Background()); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
 	}
@@ -131,7 +135,7 @@ routes:
 	if h := *gem.header.Load(); h.Get("X-Goog-Api-Key") != "kg" {
 		t.Errorf("gemini headers: %v", h)
 	}
-	if ages := c.Ages(); len(ages) != 3 || ages["multi.chat"] < 0 || ages["multi.chat"] > time.Minute {
+	if ages := c.Ages(); len(ages) != 4 || ages["multi.chat"] < 0 || ages["multi.chat"] > time.Minute {
 		t.Errorf("Ages() = %v", ages)
 	}
 
@@ -164,6 +168,28 @@ routes:
 	// Names called right after Start waits for the first fetch.
 	if got := c.Names(context.Background()); !slices.Equal(got, []string{"m-1"}) {
 		t.Errorf("Names() = %v", got)
+	}
+}
+
+func TestNamesSkipsEmptyName(t *testing.T) {
+	// Under "*" with model "local/*", the listed "local/" maps back to "".
+	p := newProvider(t, map[string]string{"": openai("local/", "local/llama3")})
+	cfg, _, err := config.Parse([]byte(fmt.Sprintf(`
+providers:
+  p: {key: k, endpoints: {chat: {base_url: %s}}}
+routes:
+  - model: "*"
+    targets: [{provider: p, model: "local/*"}]
+`, p.URL)), "test.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(cfg, nil, time.Minute, time.Second)
+	if err := c.refresh(context.Background(), endpoint{"p", "chat"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Names(context.Background()); !slices.Equal(got, []string{"llama3"}) {
+		t.Errorf("Names() = %q", got)
 	}
 }
 

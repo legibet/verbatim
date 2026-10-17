@@ -38,6 +38,26 @@ func TestMatchGlob(t *testing.T) {
 	}
 }
 
+func TestCapture(t *testing.T) {
+	tests := []struct {
+		pattern, name, want string
+		ok                  bool
+	}{
+		{"gpt-*", "gpt-6.1-sol", "6.1-sol", true},
+		{"openai/gpt-*", "openai/gpt-6.1-sol", "6.1-sol", true},
+		{"*", "a/b", "a/b", true},
+		{"*:free", "x:free", "x", true},
+		{"gpt-*", "gpt-", "", true},
+		{"gpt-*", "openai/gpt-6", "", false},
+		{"ab*ba", "aba", "", false}, // prefix and suffix must not overlap
+	}
+	for _, tt := range tests {
+		if got, ok := Capture(tt.pattern, tt.name); got != tt.want || ok != tt.ok {
+			t.Errorf("Capture(%q, %q) = %q, %v, want %q, %v", tt.pattern, tt.name, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestIsExact(t *testing.T) {
 	if !IsExact("kimi-k3") || !IsExact("model?") || IsExact("gpt-*") || IsExact("*") {
 		t.Error("IsExact misclassifies patterns")

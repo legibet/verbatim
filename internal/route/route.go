@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 
 	"verbatim/internal/config"
@@ -78,7 +79,7 @@ func New(cfg *config.Config) *Table {
 // Match finds the first route whose pattern matches clientModel and that has
 // at least one target that serves proto (design 6.3). The
 // candidates are that route's targets filtered to proto, in configuration
-// order, with Model resolved to the target's model or clientModel.
+// order, with Model resolved by upstream.
 func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cands []Candidate, ok bool) {
 	for _, r := range t.routes {
 		if !config.MatchGlob(r.pattern, clientModel) {
@@ -89,7 +90,7 @@ func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cand
 				continue
 			}
 			cands = append(cands, Candidate{
-				TargetID: TargetID{Provider: tg.provider, Model: cmp.Or(tg.model, clientModel)},
+				TargetID: TargetID{Provider: tg.provider, Model: r.upstream(tg.model, clientModel)},
 				Priority: tg.priority,
 				Weight:   tg.weight,
 			})
@@ -99,6 +100,21 @@ func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cand
 		}
 	}
 	return "", nil, false
+}
+
+// upstream resolves a target's model for clientModel (design 6.3): an absent
+// model forwards clientModel, a literal is sent as is, and a '*' is replaced
+// with the text the route pattern's '*' matched.
+func (r tableRoute) upstream(model, clientModel string) string {
+	if model == "" {
+		return clientModel
+	}
+	before, after, ok := strings.Cut(model, "*")
+	if !ok {
+		return model
+	}
+	s, _ := config.Capture(r.pattern, clientModel)
+	return before + s + after
 }
 
 // Order builds the attempt order (design 6.4 step 2): tiers by ascending

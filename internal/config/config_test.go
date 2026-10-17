@@ -65,6 +65,9 @@ routes:
   - model: "gpt-*"
     targets:
       - provider: openai             # responses, chat, and images (gpt-image-*)
+      - provider: openrouter.chat    # when OpenAI's chat endpoint fails:
+        model: "openai/gpt-*"        # gpt-6.1-sol is sent as openai/gpt-6.1-sol
+        priority: 2
   - model: "*"
     discover: false
     targets:
@@ -526,6 +529,10 @@ func TestValidation(t *testing.T) {
 		{"negative priority", routes("  - model: m\n    targets: [{provider: p, priority: -1}]\n"), "routes[0].targets[0].priority: must be at least 1"},
 		{"duplicate target", routes("  - model: m\n    targets: [{provider: p, model: x}, {provider: p, model: x, priority: 2}]\n"), "routes[0].targets[1]: duplicates targets[0]"},
 		{"duplicate target by route name", routes("  - model: m\n    targets: [{provider: p}, {provider: p, model: m, priority: 2}]\n"), "routes[0].targets[1]: duplicates targets[0]"},
+		{"duplicate target by pattern", routes("  - model: m*\n    targets: [{provider: p}, {provider: p, model: m*, priority: 2}]\n"), "routes[0].targets[1]: duplicates targets[0]"},
+		{"two stars in target model", routes("  - model: m*\n    targets: [{provider: p, model: \"x/*-*\"}]\n"), `routes[0].targets[0].model: "x/*-*": at most one '*' is allowed`},
+		{"star on exact route", routes("  - model: m\n    targets: [{provider: p, model: x/*}]\n"), `routes[0].targets[0].model: "x/*": a '*' needs a route pattern with exactly one '*', got "m"`},
+		{"star on two-star route", routes("  - model: a*b*\n    targets: [{provider: p, model: x/*}]\n"), `routes[0].targets[0].model: "x/*": a '*' needs a route pattern with exactly one '*', got "a*b*"`},
 		{"duplicate target by endpoint", routes("  - model: m\n    targets: [{provider: p}, {provider: p.responses, priority: 2}]\n"),
 			"routes[0].targets[1]: duplicates targets[0] (same provider, model and protocol responses)"},
 		{"empty protocol", routes("  - model: m\n    targets: [{provider: p.}]\n"), `routes[0].targets[0].provider: "p.": a protocol must follow the "."`},
@@ -802,18 +809,6 @@ routes:
 	if want := map[string]Endpoint{"responses": {BaseURL: "https://y/v1", Auth: "bearer", HeaderTimeout: cfg.Server.HeaderTimeout}}; b.Key != "k-123" || !reflect.DeepEqual(b.Endpoints, want) {
 		t.Errorf("merged provider = %+v", b)
 	}
-}
-
-func TestPatternRouteTargetWithoutModel(t *testing.T) {
-	// On a pattern route an absent model forwards whatever name matched, so it
-	// is a different target from any literal name.
-	mustParse(t, `
-providers:
-  p: {key: k, endpoints: {chat: {base_url: "https://x/v1"}}}
-routes:
-  - model: "m*"
-    targets: [{provider: p}, {provider: p, model: "m*"}]
-`)
 }
 
 func TestAnchorsExpansion(t *testing.T) {

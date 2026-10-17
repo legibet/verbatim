@@ -29,7 +29,17 @@ func MatchGlob(pattern, name string) bool {
 	return true
 }
 
-// IsExact reports whether a route pattern contains no wildcard.
+// Capture returns the text that the single '*' of pattern matches in name.
+// pattern must contain exactly one '*'.
+func Capture(pattern, name string) (string, bool) {
+	before, after, _ := strings.Cut(pattern, "*")
+	if len(name) < len(before)+len(after) || !strings.HasPrefix(name, before) || !strings.HasSuffix(name, after) {
+		return "", false
+	}
+	return name[len(before) : len(name)-len(after)], true
+}
+
+// IsExact reports whether a pattern contains no wildcard.
 func IsExact(pattern string) bool {
 	return !strings.Contains(pattern, "*")
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -619,12 +620,15 @@ func (c *checker) routes(cfg *Config) {
 			if t.Weight < 1 {
 				c.errorf(tpath+".weight", "must be at least 1")
 			}
-			// On an exact-name route an absent model forwards the client's
-			// name, which is the route name.
-			model := t.Model
-			if model == "" && IsExact(r.Model) {
-				model = r.Model
+			if n := strings.Count(t.Model, "*"); n > 1 {
+				c.errorf(tpath+".model", "%q: at most one '*' is allowed", t.Model)
+			} else if n == 1 && strings.Count(r.Model, "*") != 1 {
+				c.errorf(tpath+".model", "%q: a '*' needs a route pattern with exactly one '*', got %q", t.Model, r.Model)
 			}
+			// An absent model sends the same name as the route's own pattern
+			// would: the route name on an exact-name route, the client's name
+			// on a pattern route.
+			model := cmp.Or(t.Model, r.Model)
 			for _, proto := range cfg.Protocols(t) {
 				id := identity{name, model, proto}
 				if k, dup := firstTarget[id]; dup {

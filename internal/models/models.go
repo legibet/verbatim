@@ -57,7 +57,7 @@ type list struct {
 }
 
 // New returns a cache for cfg. Only endpoints that a discovering pattern
-// route uses without a model rewrite are ever fetched: no other list can
+// route uses without a literal model are ever fetched: no other list can
 // contribute to the listing. A nil transport means http.DefaultTransport.
 func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Duration) *Cache {
 	if transport == nil {
@@ -69,7 +69,7 @@ func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Dura
 			continue
 		}
 		for _, t := range r.Targets {
-			if t.Model != "" {
+			if t.Model != "" && config.IsExact(t.Model) {
 				continue
 			}
 			provider, _ := t.Split()
@@ -203,10 +203,13 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 }
 
 // Names assembles the listing (design 6.5): per route in configuration
-// order, an exact route contributes its own name, a discovering pattern route
-// contributes the names its rewrite-free targets' endpoints list that match
-// the pattern and that routing would send to this route for that endpoint's
-// protocol. The first occurrence of a name wins.
+// order, an exact route contributes its own name, and a discovering pattern
+// route contributes the client names its targets' endpoints list: an id that
+// matches the pattern for a target without a model, or the pattern with its
+// '*' replaced by what the target model's '*' matched in the id. Targets with
+// a literal model contribute nothing. A name is kept only if routing would
+// send it to this route for that endpoint's protocol. The first occurrence of
+// a name wins.
 //
 // A call made while Start's first round of fetches is still running waits
 // for it, or until ctx is done, so that a client asking right after startup
@@ -246,17 +249,29 @@ func (c *Cache) Names(ctx context.Context) []string {
 			continue
 		}
 		for _, t := range r.Targets {
-			if t.Model != "" {
+			if t.Model != "" && config.IsExact(t.Model) {
 				continue
 			}
 			provider, _ := t.Split()
 			for _, proto := range c.cfg.Protocols(t) {
 				for _, id := range lists[config.EndpointName(provider, proto)] {
-					if !config.MatchGlob(r.Model, id) {
+					name := id
+					if t.Model == "" {
+						if !config.MatchGlob(r.Model, id) {
+							continue
+						}
+					} else {
+						s, ok := config.Capture(t.Model, id)
+						if !ok {
+							continue
+						}
+						name = strings.Replace(r.Model, "*", s, 1)
+					}
+					if name == "" { // no request can name it
 						continue
 					}
-					if owner, _, ok := c.routes.Match(protocol.ID(proto), id); ok && owner == r.Model {
-						add(id)
+					if owner, _, ok := c.routes.Match(protocol.ID(proto), name); ok && owner == r.Model {
+						add(name)
 					}
 				}
 			}

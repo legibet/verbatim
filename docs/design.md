@@ -177,6 +177,9 @@ routes:
   - model: "gpt-*"
     targets:
       - provider: openai             # responses, chat, and images (gpt-image-*)
+      - provider: openrouter.chat    # when OpenAI's chat endpoint fails:
+        model: "openai/gpt-*"        # gpt-6.1-sol is sent as openai/gpt-6.1-sol
+        priority: 2
   - model: "*"
     discover: false
     targets:
@@ -253,7 +256,7 @@ Each route has a flat `targets` list; the route itself is protocol-agnostic. A t
 | Target field | Default | Meaning |
 |---|---|---|
 | `provider` | required | Provider name, or `provider.protocol` for one of its endpoints |
-| `model` | client's model name | Upstream model name. Literal only. If absent, the client's name is forwarded unchanged. |
+| `model` | client's model name | Upstream model name. Sent as written, except that a `*` is replaced with the text the route pattern's `*` matched. If absent, the client's name is forwarded unchanged. |
 | `priority` | 1 | Lower number is tried first |
 | `weight` | 1 | Relative share within a priority tier |
 
@@ -266,7 +269,7 @@ Route-level fields:
 | `balance` | `weighted` | `weighted` (random by weight within a tier) or `round_robin` (rotate within a tier, weights ignored) |
 | `discover` | `true` | For pattern routes: populate the listing endpoints from the provider endpoints' own model lists, section 6.5. Ignored on exact-name routes. |
 
-There is no provider-level model name mapping and no template substitution in `model`. If a relay prefixes every model name, each target states its full upstream name.
+A `*` in a target's `model` covers services that put a fixed prefix or suffix around the names the client uses: under the route `gpt-*`, `model: openai/gpt-*` sends `gpt-6.1-sol` as `openai/gpt-6.1-sol`. The target `model` may contain at most one `*`, and only on a route whose pattern contains exactly one, so the `*` always stands for one well-defined piece of the name; anything else is a configuration error. Names that differ in another way (OpenRouter's `anthropic/claude-opus-5.5` for `claude-opus-5-5`) get an exact-name route with the upstream name written out. There is no provider-level model name mapping and no regular-expression rewriting.
 
 ### 6.4 Selection and attempt order
 
@@ -284,7 +287,7 @@ Each target is attempted at most once per request. A tier is exhausted before th
 Many clients populate their model picker from `/v1/models`, so the list has to be real. It is assembled per route, in configuration order:
 
 - An exact-name route contributes its own `model`. Providers are not consulted.
-- A pattern route with `discover: true` (the default) contributes the model ids listed by its targets' endpoints that match the pattern. Targets that carry a `model` rewrite are skipped, because the names a provider lists are its upstream names and would not match what the client must send. Each discovered name is then resolved through the routing rules of section 6.3 for that endpoint's protocol, and is kept only if routing would send it to this route; otherwise an earlier route owns the name and the entry is dropped.
+- A pattern route with `discover: true` (the default) contributes the client names behind the model ids its targets' endpoints list. For a target without `model`, a listed id that matches the pattern is the name itself. For a target whose `model` has a `*`, a listed id that matches that `model` gives the name by putting what the `*` matched in place of the pattern's `*`: under `gpt-*` with `model: openai/gpt-*`, the listed `openai/gpt-7` becomes `gpt-7`. Targets with a `model` without `*` are skipped, because such a name says nothing about which client names lead to it. Each discovered name is then resolved through the routing rules of section 6.3 for that endpoint's protocol, and is kept only if routing would send it to this route; otherwise an earlier route owns the name and the entry is dropped.
 - A pattern route with `discover: false` contributes nothing.
 
 Names are deduplicated; the first occurrence wins. The response lists names only; it does not promise that every listed name works for every protocol.
@@ -628,7 +631,6 @@ Out, for later:
 - `gemini` entry point (interface in place, adapter not written).
 - Responses resource operations and WebSocket transport (section 4.4).
 - Breaker input from stream-level outcomes.
-- Model name templates in targets.
 - Multiple client keys.
 
 ## 17. Open items

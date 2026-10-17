@@ -48,6 +48,10 @@ func testConfig() *config.Config {
 				{Provider: "rr-c", Priority: 1, Weight: 1},
 				{Provider: "rr-d", Priority: 2, Weight: 1},
 			}},
+			{Model: "claude-*", Balance: "weighted", Targets: []config.Target{
+				{Provider: "or.anthropic", Model: "anthropic/claude-*", Priority: 1, Weight: 1},
+				{Provider: "local", Model: "*:q4", Priority: 1, Weight: 1},
+			}},
 			{Model: "*", Balance: "weighted", Targets: []config.Target{
 				{Provider: "or.anthropic", Priority: 1, Weight: 1},
 				{Provider: "local", Priority: 1, Weight: 1},
@@ -86,6 +90,10 @@ func TestMatch(t *testing.T) {
 		{"provider without the protocol: falls through", protocol.Anthropic, "both", "*", []TargetID{{"or", "both"}}},
 		{"catch-all matches slashes", protocol.Anthropic, "anthropic/claude-x", "*",
 			[]TargetID{{"or", "anthropic/claude-x"}}},
+		{"target model star takes what the route star matched", protocol.Anthropic, "claude-opus-5-5", "claude-*",
+			[]TargetID{{"or", "anthropic/claude-opus-5-5"}}},
+		{"star with a suffix", protocol.Chat, "claude-opus", "claude-*", []TargetID{{"local", "opus:q4"}}},
+		{"route star matched nothing", protocol.Anthropic, "claude-", "claude-*", []TargetID{{"or", "anthropic/claude-"}}},
 		{"exact route has no responses target: falls through, catch-all has none either", protocol.Responses, "kimi-k3", "", nil},
 		{"case-sensitive", protocol.Responses, "GPT-6", "", nil},
 	}
