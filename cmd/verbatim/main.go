@@ -123,15 +123,16 @@ func configPath(flagValue string) string {
 
 // openStore opens the log database named by the configuration for reading.
 // Retention is disabled: deleting old rows is the server's job.
-func openStore(cfgFlag string) (*store.Store, error) {
+func openStore(cfgFlag string) (*store.Store, *config.Config, error) {
 	cfg, err := config.LoadLenient(configPath(cfgFlag))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, err := os.Stat(cfg.Log.Path); err != nil {
-		return nil, fmt.Errorf("log database: %w", err)
+		return nil, nil, fmt.Errorf("log database: %w", err)
 	}
-	return store.Open(cfg.Log.Path, 0)
+	st, err := store.Open(cfg.Log.Path, 0)
+	return st, cfg, err
 }
 
 // parseWhen parses a range bound: a duration back from now in the

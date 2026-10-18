@@ -86,7 +86,7 @@ func TestImagesUsage(t *testing.T) {
 	}{
 		{"edit with details", Edit, false, `{"created":1,"data":[{"b64_json":"` + pic + `"}],` + details + `}`, "276 256 515 515"},
 		{"generate without details", Generate, false, `{"created":1,"data":[{"b64_json":"` + pic + `"}],"model":"codex/gpt-image-2",` + bare + `}`, "12 0 515 -"},
-		{"edit without details", Edit, false, `{"data":[{"b64_json":"` + pic + `"}],` + bare + `}`, "12 - 515 -"},
+		{"edit without details", Edit, false, `{"data":[{"b64_json":"` + pic + `"}],` + bare + `}`, "12 12 515 -"},
 		{"stream", Edit, true, "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n" +
 			"event: image_edit.partial_image\ndata: {\"type\":\"image_edit.partial_image\",\"b64_json\":\"" + pic + "\"}\n\n" +
 			"event: image_edit.completed\ndata: {\"type\":\"image_edit.completed\",\"b64_json\":\"" + pic + "\"," + details + "}\n\n", "276 256 515 515"},

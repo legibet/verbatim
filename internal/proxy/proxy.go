@@ -174,6 +174,9 @@ func (h *Handler) Wait(timeout time.Duration) bool {
 // SetPricing replaces the price table used for new log rows.
 func (h *Handler) SetPricing(t *pricing.Table) { h.pricing.Store(t) }
 
+// Pricing returns the price table new log rows are priced with.
+func (h *Handler) Pricing() *pricing.Table { return h.pricing.Load() }
+
 // Stats returns a snapshot of the gateway's in-memory state.
 func (h *Handler) Stats() Stats {
 	rt := h.rt.Load()

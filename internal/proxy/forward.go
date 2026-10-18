@@ -716,9 +716,7 @@ func (x *exchange) setUsage(tee *usageTee, c route.Candidate) {
 		return
 	}
 	x.row.PriceKey = &key
-	// An image request's token counts mix text and image tokens, so only an
-	// entry with image prices prices it.
-	if x.proto.ID() == protocol.Images && price.ImageInput == nil && price.ImageOutput == nil {
+	if x.proto.ID() == protocol.Images && !price.HasImagePrice() {
 		return
 	}
 	if usd, priceJSON, ok := pricing.Cost(u, price); ok {

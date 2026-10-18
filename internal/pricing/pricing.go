@@ -37,6 +37,11 @@ type Price struct {
 	Tiers                   []Tier // ascending by Size
 }
 
+// HasImagePrice reports whether the price has an image price. An images
+// request's token counts mix text and image tokens, so only such a price
+// prices it.
+func (p Price) HasImagePrice() bool { return p.ImageInput != nil || p.ImageOutput != nil }
+
 // Tier is a context-size price tier. It applies when the request's context
 // exceeds Size; a nil price inherits the base Price.
 type Tier struct {
@@ -244,6 +249,13 @@ func (t *Table) Lookup(clientModel, upstreamModel string) (key string, p Price, 
 		}
 	}
 	return "", Price{}, false
+}
+
+// Prices reports whether the table has a price for a request of the protocol
+// logged with these model names.
+func (t *Table) Prices(proto protocol.ID, clientModel, upstreamModel string) bool {
+	_, p, ok := t.Lookup(clientModel, upstreamModel)
+	return ok && (proto != protocol.Images || p.HasImagePrice())
 }
 
 // Models returns the priced model ids, sorted.

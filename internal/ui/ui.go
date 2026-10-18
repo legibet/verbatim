@@ -25,6 +25,7 @@ import (
 
 	"verbatim/internal/config"
 	"verbatim/internal/pricing"
+	"verbatim/internal/protocol"
 	"verbatim/internal/proxy"
 	"verbatim/internal/store"
 )
@@ -47,6 +48,8 @@ type Options struct {
 	// exposes its redacted copy; when its server.api_key is set, /ui/api/*
 	// requires it as a bearer token.
 	Config func() *config.Config
+	// Pricing returns the price table new requests are priced with.
+	Pricing func() *pricing.Table
 	// ReloadPricing loads the price table from pricing.cache and installs it.
 	ReloadPricing func() (*pricing.Table, []string, error)
 	// ReloadConfig reads the configuration file again and serves it,
@@ -58,6 +61,7 @@ type server struct {
 	store         *store.Store
 	stats         func() proxy.Stats
 	config        func() *config.Config
+	pricing       func() *pricing.Table
 	reloadPricing func() (*pricing.Table, []string, error)
 	reloadConfig  func() ([]string, error)
 	static        fs.FS
@@ -80,6 +84,7 @@ func New(o Options) http.Handler {
 		store:         o.Store,
 		stats:         o.Stats,
 		config:        o.Config,
+		pricing:       o.Pricing,
 		reloadPricing: o.ReloadPricing,
 		reloadConfig:  o.ReloadConfig,
 		static:        static,
@@ -292,7 +297,11 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
-	if v.UnpricedModels, err = s.store.UnpricedModels(f); err != nil {
+	prices := s.pricing()
+	priced := func(protocolID, client, upstream string) bool {
+		return prices.Prices(protocol.ID(protocolID), client, upstream)
+	}
+	if v.UnpricedModels, err = s.store.UnpricedModels(f, priced); err != nil {
 		s.internalError(w, err)
 		return
 	}

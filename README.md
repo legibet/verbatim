@@ -125,7 +125,7 @@ verbatim status                          live endpoint state from the running se
 
 ## Pricing
 
-Costs are configured list prices, nothing more: they cannot know what a relay actually charges. `verbatim pricing sync`, or Sync prices in the UI, fetches llm-metadata / models.dev provider files, and the running server uses them for new requests (logged requests keep their cost); a request is priced by the client's model name, exact match only, then by `pricing.aliases`. Those files have no image token prices: price image models such as `gpt-image-2` in the overrides file, with `image_input` and `image_output` (see `verbatim.example.yaml`). Requests with no price are counted and listed as such in the UI and in `verbatim usage`.
+Costs are configured list prices, nothing more: they cannot know what a relay actually charges. `verbatim pricing sync`, or Sync prices in the UI, fetches llm-metadata / models.dev provider files, and the running server uses them for new requests (logged requests keep their cost); a request is priced by the client's model name, exact match only, then by `pricing.aliases`. Those files have no image token prices: price image models such as `gpt-image-2` in the overrides file, with `image_input` and `image_output` (see `verbatim.example.yaml`). Requests with no price are counted as such in the UI and in `verbatim usage`, which also list the model names the price table still has no price for.
 
 ## Development
 

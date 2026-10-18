@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -128,10 +129,21 @@ func newServer(t *testing.T, apiKey string, stats proxy.Stats) http.Handler {
 	t.Helper()
 	cfg := loadConfig(t)
 	cfg.Server.APIKey = apiKey
+	// claude-haiku's one request was logged unpriced; the table prices it now.
+	dir := t.TempDir()
+	overrides := filepath.Join(dir, "overrides.json")
+	if err := os.WriteFile(overrides, []byte(`{"models":{"claude-haiku":{"cost":{"input":1,"output":2}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prices, _, err := pricing.Load(dir, nil, overrides, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return New(Options{
-		Store:  newStore(t, testRows),
-		Stats:  func() proxy.Stats { return stats },
-		Config: func() *config.Config { return cfg },
+		Store:   newStore(t, testRows),
+		Stats:   func() proxy.Stats { return stats },
+		Config:  func() *config.Config { return cfg },
+		Pricing: func() *pricing.Table { return prices },
 	})
 }
 
@@ -322,7 +334,9 @@ func TestUsage(t *testing.T) {
 	if len(v.Daily) == 0 {
 		t.Error("daily series is empty")
 	}
-	if len(v.UnpricedModels) != 2 || v.UnpricedModels[0] != (store.ModelCount{Model: "gpt-x", Count: 2}) {
+	// The total still counts claude-haiku's unpriced row; the list leaves out
+	// the name the price table now prices.
+	if len(v.UnpricedModels) != 1 || v.UnpricedModels[0] != (store.ModelCount{Model: "gpt-x", Count: 2}) {
 		t.Errorf("unpriced %+v", v.UnpricedModels)
 	}
 	for _, k := range []string{`"rows":`, `"total":`, `"unpriced_models":`, `"daily":`, `"input_tokens":500`, `"no_usage":0`} {

@@ -87,11 +87,12 @@ routes:
 		t.Errorf("edit row: images in %v out %v, cost %v", deref(row.InputImageTokens), deref(row.OutputImageTokens), deref(row.CostUSD))
 	}
 
-	// An edit whose usage does not report its image tokens is not priced; the
-	// price entry found is still recorded.
+	// An edit whose usage does not report its image tokens has all its input
+	// priced as image input.
 	res = g.post(t, "/v1/images/edits", `{"model":"gpt-image-2","prompt":"x","images":[{"image_url":"data:image/png;base64,AA=="}]}`)
-	if row = g.row(t, res.rid); res.status != 200 || row.CostUSD != nil || deref(row.PriceKey) != "gpt-image-2" {
-		t.Errorf("edit without image tokens: %d, cost %v, price key %v", res.status, deref(row.CostUSD), deref(row.PriceKey))
+	if row = g.row(t, res.rid); res.status != 200 || deref(row.InputImageTokens) != int64(12) ||
+		row.CostUSD == nil || *row.CostUSD != (12*8+515*30)/1e6 {
+		t.Errorf("edit without image tokens: %d, images in %v, cost %v", res.status, deref(row.InputImageTokens), deref(row.CostUSD))
 	}
 
 	// Image requests are priced only by an entry with image prices.

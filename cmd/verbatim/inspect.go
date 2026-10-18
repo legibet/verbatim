@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"verbatim/internal/config"
+	"verbatim/internal/pricing"
+	"verbatim/internal/protocol"
 	"verbatim/internal/store"
 	"verbatim/internal/ui"
 )
@@ -51,7 +53,7 @@ func usage(args []string) int {
 		return 2
 	}
 
-	st, err := openStore(*cfgPath)
+	st, cfg, err := openStore(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -62,7 +64,15 @@ func usage(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	unpriced, err := st.UnpricedModels(f)
+	p := cfg.Pricing
+	prices, _, err := pricing.Load(p.Cache, p.Sources, p.Overrides, p.Aliases)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pricing:", err)
+		return 1
+	}
+	unpriced, err := st.UnpricedModels(f, func(protocolID, client, upstream string) bool {
+		return prices.Prices(protocol.ID(protocolID), client, upstream)
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -117,7 +127,7 @@ func usage(args []string) int {
 		for _, m := range unpriced {
 			names = append(names, fmt.Sprintf("%s (%d)", m.Model, m.Count))
 		}
-		fmt.Printf("Unpriced models: %s\n", strings.Join(names, ", "))
+		fmt.Printf("Models with no price in the price table: %s\n", strings.Join(names, ", "))
 	}
 	return 0
 }
@@ -141,7 +151,7 @@ func logCmd(args []string) int {
 		return 2
 	}
 
-	st, err := openStore(*cfgPath)
+	st, _, err := openStore(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

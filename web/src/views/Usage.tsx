@@ -92,23 +92,25 @@ export function Usage() {
             <Breakdown rows={data.rows} total={data.total} by={by} />
           </section>
 
-          <Unpriced models={data.unpriced_models} />
+          <Unpriced models={data.unpriced_models} onSynced={reload} />
         </>
       )}
     </div>
   )
 }
 
-// Unpriced lists the unpriced client model names and offers a price sync:
-// the server downloads pricing.sources as `verbatim pricing sync` does. The
-// new prices apply to new requests; logged requests keep their cost.
-function Unpriced({ models }: { models: UsageView["unpriced_models"] }) {
+// Unpriced lists the client model names that still have no price and offers
+// a price sync: the server downloads pricing.sources as `verbatim pricing
+// sync` does. The new prices apply to new requests; logged requests keep
+// their cost.
+function Unpriced({ models, onSynced }: { models: UsageView["unpriced_models"]; onSynced: () => void }) {
   const [syncing, setSyncing] = useState(false)
   const [result, setResult] = useState<PricingSync | Error | null>(null)
   const sync = async () => {
     setSyncing(true)
     try {
       setResult(await postJSON("pricing/sync", isPricingSync))
+      onSynced()
     } catch (e) {
       setResult(e instanceof Error ? e : new Error(String(e)))
     } finally {
@@ -156,11 +158,11 @@ function Unpriced({ models }: { models: UsageView["unpriced_models"] }) {
         </div>
       )}
       {models.length === 0 ? (
-        <p className="text-muted-foreground">Every request with usage in this range has a price.</p>
+        <p className="text-muted-foreground">Every model with usage in this range has a price.</p>
       ) : (
         <div className="space-y-2">
           <p className="max-w-[72ch] text-muted-foreground">
-            These client model names had usage but no price. Sync prices if a source has added one since, map the
+            These client model names had usage in this range and still have no price. Sync prices if a source has added one, map the
             name to a priced name in <code className="font-mono text-foreground">pricing.aliases</code>, or price it in{" "}
             <code className="font-mono text-foreground">pricing.overrides</code>.
           </p>

@@ -184,6 +184,36 @@ func TestCost(t *testing.T) {
 	}
 }
 
+// An images request is priced only by an entry with an image price; gpt-image-2
+// comes from the provider files with text prices alone.
+func TestPrices(t *testing.T) {
+	ov := filepath.Join(t.TempDir(), "overrides.json")
+	writeJSON(t, ov, m{"models": m{
+		"text-only":  m{"cost": m{"input": 5, "output": 30}},
+		"with-image": m{"cost": m{"input": 5, "image_input": 8, "image_output": 30}},
+	}})
+	tab, _, err := Load(t.TempDir(), nil, ov, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		proto            protocol.ID
+		client, upstream string
+		want             bool
+	}{
+		{protocol.Chat, "text-only", "", true},
+		{protocol.Images, "text-only", "", false},
+		{protocol.Images, "with-image", "", true},
+		{protocol.Images, "renamed", "with-image", true},
+		{protocol.Chat, "unknown", "", false},
+	}
+	for _, tt := range tests {
+		if got := tab.Prices(tt.proto, tt.client, tt.upstream); got != tt.want {
+			t.Errorf("Prices(%s, %q, %q) = %v, want %v", tt.proto, tt.client, tt.upstream, got, tt.want)
+		}
+	}
+}
+
 func TestCostImages(t *testing.T) {
 	ov := filepath.Join(t.TempDir(), "overrides.json")
 	writeJSON(t, ov, m{"models": m{

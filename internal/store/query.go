@@ -1,9 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -322,27 +324,41 @@ type ModelCount struct {
 }
 
 // UnpricedModels lists the client model names that have requests with usage
-// but no cost in the range, most requests first.
-func (s *Store) UnpricedModels(f UsageFilter) ([]ModelCount, error) {
+// but no cost in the range and that the price table still has no price for,
+// most requests first. priced reports whether the table prices a request
+// of the protocol logged with these client and upstream model names; rows
+// logged before their price was added keep no cost, but their names need
+// nothing more.
+func (s *Store) UnpricedModels(f UsageFilter, priced func(protocol, clientModel, upstreamModel string) bool) ([]ModelCount, error) {
 	w := f.where()
 	w.add(`cost_usd IS NULL AND usage_json IS NOT NULL`)
-	q, err := s.r.Query(`SELECT client_model, COUNT(*) FROM requests`+w.String()+
-		` GROUP BY client_model ORDER BY 2 DESC, 1`, w.args...)
+	q, err := s.r.Query(`SELECT protocol, client_model, COALESCE(upstream_model, ''), COUNT(*) FROM requests`+w.String()+
+		` GROUP BY 1, 2, 3`, w.args...)
 	if err != nil {
 		return nil, fmt.Errorf("unpriced models: %w", err)
 	}
 	defer q.Close()
-	var out []ModelCount
+	counts := map[string]int64{}
 	for q.Next() {
-		var m ModelCount
-		if err := q.Scan(&m.Model, &m.Count); err != nil {
+		var proto, client, upstream string
+		var n int64
+		if err := q.Scan(&proto, &client, &upstream, &n); err != nil {
 			return nil, fmt.Errorf("unpriced models: %w", err)
 		}
-		out = append(out, m)
+		if !priced(proto, client, upstream) {
+			counts[client] += n
+		}
 	}
 	if err := q.Err(); err != nil {
 		return nil, fmt.Errorf("unpriced models: %w", err)
 	}
+	out := make([]ModelCount, 0, len(counts))
+	for m, n := range counts {
+		out = append(out, ModelCount{Model: m, Count: n})
+	}
+	slices.SortFunc(out, func(a, b ModelCount) int {
+		return cmp.Or(cmp.Compare(b.Count, a.Count), strings.Compare(a.Model, b.Model))
+	})
 	return out, nil
 }
 

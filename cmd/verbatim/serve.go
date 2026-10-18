@@ -156,7 +156,7 @@ func runServer(path string) error {
 	}()
 
 	mux := http.NewServeMux()
-	mux.Handle("/ui/", ui.New(ui.Options{Store: st, Stats: h.Stats, Config: h.Config, ReloadPricing: reloadPricing, ReloadConfig: reloadConfig}))
+	mux.Handle("/ui/", ui.New(ui.Options{Store: st, Stats: h.Stats, Config: h.Config, Pricing: h.Pricing, ReloadPricing: reloadPricing, ReloadConfig: reloadConfig}))
 	mux.Handle("/", h)
 	// No WriteTimeout: streamed responses run as long as the upstream does,
 	// bounded by server.idle_timeout inside the proxy.

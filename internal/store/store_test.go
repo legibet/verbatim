@@ -318,12 +318,17 @@ func TestUsage(t *testing.T) {
 		t.Fatal("unknown grouping accepted")
 	}
 
-	unpriced, err := s.UnpricedModels(UsageFilter{})
+	unpriced, err := s.UnpricedModels(UsageFilter{}, func(string, string, string) bool { return false })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fmt.Sprint(unpriced) != "[{gpt-5.5 1}]" {
 		t.Fatalf("unpriced = %v", unpriced)
+	}
+	// A name the price table prices now is no longer listed.
+	unpriced, _ = s.UnpricedModels(UsageFilter{}, func(_, client, _ string) bool { return client == "gpt-5.5" })
+	if len(unpriced) != 0 {
+		t.Fatalf("unpriced once priced = %v", unpriced)
 	}
 }
 

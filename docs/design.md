@@ -483,10 +483,10 @@ Normalization into the row:
 - `anthropic`: `input_tokens` is already uncached. `cache_write_tokens` = `cache_creation_input_tokens`; `cache_write_1h_tokens` = `cache_creation.ephemeral_1h_input_tokens` when present, else null.
 - `chat`, `responses`: the reported prompt count includes cached and cache-written tokens. `input_tokens` = prompt count minus `cached_tokens` minus `cache_write_tokens`, each treated as 0 only when the provider reports the details object at all; if the details object is absent, `input_tokens` holds the full prompt count and the cache columns are null. OpenAI reports `cache_write_tokens` for GPT-5.6 and later; its cache lifetime is 30 minutes and has no 1-hour variant, so `cache_write_1h_tokens` is null.
 - `gemini`: `input_tokens` = `promptTokenCount` minus `cachedContentTokenCount`; no cache writes are reported.
-- `images`: `input_tokens` and `output_tokens` as reported (the Images API reports no cache tokens); `input_image_tokens` and `output_image_tokens` from the details objects. Some relays (magpie) report only the totals. A generations request takes only a text prompt, so its `input_image_tokens` is 0 when the details are missing; for an edit it stays null. With `n` above 1 in a stream, the last completed event's usage is kept, as for every other protocol; whether that event reports the whole request or one image is not documented and has not been observed, because the relays tested return one image.
+- `images`: `input_tokens` and `output_tokens` as reported (the Images API reports no cache tokens); `input_image_tokens` and `output_image_tokens` from the details objects. Some relays (magpie) report only the totals. When the input details are missing, a generations request, which takes only a text prompt, gets an `input_image_tokens` of 0, and an edit gets its whole `input_tokens`: an edit's input images outweigh its prompt, so all of its input is priced as image input, which overstates the cost by the prompt tokens times the difference between the image and text input prices (for gpt-image-2, 20 prompt tokens next to 256 image tokens cost 0.3% more). With `n` above 1 in a stream, the last completed event's usage is kept, as for every other protocol; whether that event reports the whole request or one image is not documented and has not been observed, because the relays tested return one image.
 - `reasoning_tokens` is recorded as reported and is part of `output_tokens`.
 
-Missing fields are null, never zero. Nothing is estimated. The raw object is always kept in `usage_json`.
+Apart from those two image rules, missing fields are null, never zero, and nothing is estimated. The raw object is always kept in `usage_json`.
 
 ## 12. Pricing
 
@@ -513,7 +513,7 @@ The price is looked up by the **client's model name** (`client_model`), as new-a
 3. Else, exact match of the upstream model name, then its alias.
 4. Else, no price: `cost_usd` is null and the row is still written.
 
-There is no prefix, pattern, or fuzzy matching. A dated or versioned model name the price table does not know is priced only if the user adds an alias or an override; the UI's "unpriced models" list shows which names need one.
+There is no prefix, pattern, or fuzzy matching. A dated or versioned model name the price table does not know is priced only if the user adds an alias or an override; the UI's "unpriced models" list shows which names need one: the client model names of unpriced requests in the range that the current price table still cannot price, checked by these steps with the client and upstream names each request was logged with, and for an `images` request by an entry with an image price (section 12.3). A request logged before its price was added keeps no cost, and is still counted as unpriced in the aggregates, but its name leaves the list.
 
 ### 12.3 Cost
 
@@ -536,7 +536,7 @@ cost = (input_tokens  - input_image_tokens)  * cost.input
      + output_image_tokens                   * cost.image_output
 ```
 
-plus the cache terms above. An `images` request is priced only by an entry with an image price, since its counts mix text and image tokens. For such an entry the image tokens must be reported: a null `input_image_tokens` leaves the request unpriced, and a null `output_image_tokens` does too, unless the model has no text output price (gpt-image-2 has none), when all output is image output. A token count with no price for it leaves the request unpriced as well: image tokens for an entry without that image price, or text output for a model without a text output price. Nothing is estimated.
+plus the cache terms above. An `images` request is priced only by an entry with an image price, since its counts mix text and image tokens. For such an entry the image tokens must be known: a null `input_image_tokens` (only when even `input_tokens` is missing, section 11.3) leaves the request unpriced, and a null `output_image_tokens` does too, unless the model has no text output price (gpt-image-2 has none), when all output is image output. A token count with no price for it leaves the request unpriced as well: image tokens for an entry without that image price, or text output for a model without a text output price. Beyond the image input rule of section 11.3, nothing is estimated.
 
 ## 13. CLI
 
@@ -565,7 +565,7 @@ Views:
 
 1. **Requests.** One row per request: time, protocol and operation, client model and the provider / upstream model it went to, status and outcome, stream flag, time to first byte and total time, token columns (input, cache read, cache write, output, reasoning), cost, attempt count, and pin state. Filters: time range, protocol, provider, route, status class, outcome, model substring, errors only. A live mode appends new rows by polling.
 2. **Request detail.** Opened from a row. Shows the routing explanation from `routing_json` (matched route, candidates, computed order, ownership, pin state, breaker skips), the attempt timeline from `attempt_log` (provider, status or error, duration, error excerpt for each attempt), the raw usage object, and the cost breakdown: each token column multiplied by the unit price stored in `price_json`, with the total and the `price_key`.
-3. **Usage.** Totals for the selected range and a breakdown by model, provider, route, or day, with a daily chart of cost and tokens. Every aggregate states how many requests in it had no price and how many had no usage, and lists the unpriced model names, with a Sync prices action (section 12.1).
+3. **Usage.** Totals for the selected range and a breakdown by model, provider, route, or day, with a daily chart of cost and tokens. Every aggregate states how many requests in it had no price and how many had no usage, and lists the model names that still have no price (section 12.2), with a Sync prices action (section 12.1).
 4. **Providers.** Live state per provider endpoint: breaker closed, open until when, or half-open; consecutive counted failures; committed, failover, and `upstream_error_event` counts over the last hour; active pins; age of the cached model list; log rows dropped. Below it, the served configuration, redacted, with the Reload config action (section 6.6).
 
 JSON API: `GET /ui/api/requests` (filters and cursor pagination), `GET /ui/api/requests/{id}`, `GET /ui/api/usage`, `GET /ui/api/providers`, `GET /ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in an endpoint's `base_url` redacted), `POST /ui/api/pricing/sync`, and `POST /ui/api/config/reload` (the reloaded file's warnings, or 422 with the reason it was refused). The API rejects cross-origin browser requests other than `GET`, `HEAD`, and `OPTIONS` (Go's `http.CrossOriginProtection`), so another site's page cannot start a sync or a reload on a loopback server without `server.api_key`.
