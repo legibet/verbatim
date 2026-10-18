@@ -156,8 +156,8 @@ func geminiStatus(status int) string {
 	return "UNKNOWN"
 }
 
-// ModelList reads a Gemini model list; names come as "models/<id>".
-// Gemini paginates by nextPageToken, which is not followed.
+// ModelList reads a Gemini model list; names come as "models/<id>" and the
+// next page's token as nextPageToken.
 func (geminiProtocol) ModelList(body []byte) ([]string, string) {
 	ids := modelIDs(body, "models", "name", "models/")
 	if ids == nil {

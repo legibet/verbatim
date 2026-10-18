@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -240,7 +241,23 @@ func optCost(c *float64) string {
 	if c == nil {
 		return "-"
 	}
-	return fmt.Sprintf("%.4f", *c)
+	return usd(*c)
+}
+
+// usd formats a cost as the web UI does: four decimals below one dollar so
+// that per-request costs stay aligned, "<0.0001" for an amount that would
+// show as zero, and cents with thousands separators from one dollar up.
+func usd(v float64) string {
+	switch a := math.Abs(v); {
+	case v == 0:
+		return "0.0000"
+	case a < 0.0001:
+		return "<0.0001"
+	case a < 1:
+		return fmt.Sprintf("%.4f", v)
+	}
+	cents := int64(math.Round(v * 100))
+	return fmt.Sprintf("%s.%02d", count(cents/100), max(cents%100, -(cents%100)))
 }
 
 func millis(ms int64) string {

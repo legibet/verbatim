@@ -56,6 +56,14 @@ func TestCount(t *testing.T) {
 	}
 }
 
+func TestUSD(t *testing.T) {
+	for in, want := range map[float64]string{0: "0.0000", 0.00004: "<0.0001", 0.0123: "0.0123", 1234.567: "1,234.57", -2.5: "-2.50"} {
+		if got := usd(in); got != want {
+			t.Errorf("usd(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestTable(t *testing.T) {
 	var b strings.Builder
 	tb := newTable(column{name: "NAME"}, column{"N", true}, column{name: "NOTE"})

@@ -97,7 +97,7 @@ func usage(args []string) int {
 	line := func(key string, a store.Aggregate) []string {
 		return []string{key, count(a.Requests), count(a.Errors),
 			count(a.Input), count(a.CacheRead), count(a.CacheWrite),
-			count(a.Output), count(a.Reasoning), fmt.Sprintf("%.4f", a.CostUSD),
+			count(a.Output), count(a.Reasoning), usd(a.CostUSD),
 			count(a.Unpriced), count(a.NoUsage)}
 	}
 	var lines [][]string
