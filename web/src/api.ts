@@ -106,6 +106,8 @@ export type ProvidersView = { endpoints: EndpointView[]; log_dropped: number; pi
 
 export type ConfigView = Record<string, unknown>
 
+export type PricingSync = { models: number; warnings: string[] }
+
 // JSON-parse boundary: guards check the shape the views rely on; the server
 // is the source of the field types.
 
@@ -121,6 +123,8 @@ export const isUsageView = (v: unknown): v is UsageView =>
 export const isProvidersView = (v: unknown): v is ProvidersView =>
   isObject(v) && Array.isArray(v.endpoints)
 export const isConfigView = (v: unknown): v is ConfigView => isObject(v)
+export const isPricingSync = (v: unknown): v is PricingSync =>
+  isObject(v) && typeof v.models === "number" && Array.isArray(v.warnings)
 
 // Parsers for the JSON-string columns of a row (routing_json, attempt_log,
 // price_json). A malformed column yields null or an empty list.
@@ -193,12 +197,17 @@ export function useKeyVersion(): number {
 
 export class AuthError extends Error {}
 
-export async function getJSON<T>(path: string, guard: (v: unknown) => v is T, signal?: AbortSignal): Promise<T> {
+export function getJSON<T>(path: string, guard: (v: unknown) => v is T, signal?: AbortSignal): Promise<T> {
+  return requestJSON(path, guard, { signal })
+}
+
+export function postJSON<T>(path: string, guard: (v: unknown) => v is T): Promise<T> {
+  return requestJSON(path, guard, { method: "POST" })
+}
+
+async function requestJSON<T>(path: string, guard: (v: unknown) => v is T, init: RequestInit): Promise<T> {
   const key = getKey()
-  const res = await fetch(`/ui/api/${path}`, {
-    headers: key ? { Authorization: `Bearer ${key}` } : {},
-    signal,
-  })
+  const res = await fetch(`/ui/api/${path}`, { ...init, headers: key ? { Authorization: `Bearer ${key}` } : {} })
   if (res.status === 401) throw new AuthError("unauthenticated")
   const body: unknown = await res.json().catch(() => undefined)
   if (!res.ok) {

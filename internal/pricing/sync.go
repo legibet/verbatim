@@ -92,11 +92,11 @@ func writeAtomic(name string, data []byte) error {
 	return nil
 }
 
-// Watch reloads the table whenever a cached source file or the overrides
-// file changes (modification time or size), checking every interval, and
-// hands each successfully loaded table to onChange. A failed reload is logged
-// and the caller keeps its current table. Watch returns when ctx is done.
-func Watch(ctx context.Context, interval time.Duration, cacheDir string, sources []string, overridesPath string, aliases map[string]string, onChange func(*Table)) {
+// Watch calls reload, which loads and installs the table, whenever a cached
+// source file or the overrides file changes (modification time or size),
+// checking every interval. A failed reload is logged and the caller keeps its
+// current table. Watch returns when ctx is done.
+func Watch(ctx context.Context, interval time.Duration, cacheDir string, sources []string, overridesPath string, reload func() (*Table, []string, error)) {
 	names, err := cacheFiles(sources)
 	if err != nil {
 		slog.Warn("pricing reload disabled", "err", err)
@@ -133,7 +133,7 @@ func Watch(ctx context.Context, interval time.Duration, cacheDir string, sources
 			continue
 		}
 		last = cur
-		t, warnings, err := Load(cacheDir, sources, overridesPath, aliases)
+		t, warnings, err := reload()
 		if err != nil {
 			slog.Warn("pricing reload failed; keeping the previous table", "err", err)
 			continue
@@ -142,6 +142,5 @@ func Watch(ctx context.Context, interval time.Duration, cacheDir string, sources
 			slog.Warn("pricing: " + w)
 		}
 		slog.Info("pricing table reloaded", "models", len(t.prices))
-		onChange(t)
 	}
 }

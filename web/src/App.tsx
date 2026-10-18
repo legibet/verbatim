@@ -88,7 +88,7 @@ export function App() {
 
         <footer className="shrink-0 border-t">
           <div className="mx-auto flex h-8 max-w-[1600px] items-center justify-between px-6 text-[11.5px] text-muted-foreground">
-            <span>Read-only view of the gateway log and live state. Costs are configured list prices.</span>
+            <span>The gateway log and live state. Costs are configured list prices.</span>
             {hasKey && (
               <button
                 type="button"

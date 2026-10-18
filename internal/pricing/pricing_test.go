@@ -408,7 +408,13 @@ func TestWatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tables := make(chan *Table, 4)
-	go Watch(ctx, 10*time.Millisecond, dir, sources, ov, nil, func(t *Table) { tables <- t })
+	go Watch(ctx, 10*time.Millisecond, dir, sources, ov, func() (*Table, []string, error) {
+		t, warnings, err := Load(dir, sources, ov, nil)
+		if err == nil {
+			tables <- t
+		}
+		return t, warnings, err
+	})
 
 	select {
 	case <-tables:

@@ -10,12 +10,12 @@ verbatim is a small, self-hosted gateway that sits between LLM API clients and L
 2. **Pass through by default.** The data plane changes exactly three things in a request: the authentication header, the model name, and the destination URL. Everything else, including unknown fields, dialect extensions, extra headers, query parameters, and stream events, is forwarded byte for byte. An upstream response, success or error, is returned to the client unchanged, with its status code, headers, and body.
 3. **No hidden behavior.** Every change verbatim makes to a request is declared in the configuration file. There are no heuristics based on hostnames, error text, or model names beyond what the configuration states. verbatim never retries after it has committed a response to the client.
 4. **Deterministic per target.** For a given configuration, client request, and chosen target, the forwarded request is a pure function of those three. Which target is chosen may vary by selection and failover; session affinity exists so that an agent conversation keeps hitting the same target. This matters for Anthropic prompt caching and for Anthropic preserved thinking, which binds thinking-block signatures to the exact request prefix (`system`, `tools`, earlier `messages`) and rejects later turns when the prefix changes.
-5. **Small.** One Go binary, one YAML file, one SQLite database, and an embedded read-only web UI.
+5. **Small.** One Go binary, one YAML file, one SQLite database, and an embedded web UI.
 
 ## 2. Non-goals
 
 - Format conversion of any kind, including Chat Completions to or from Responses.
-- Per-user accounts, multiple client keys with separate quotas, billing, or a management UI. The embedded web UI (section 14) is read-only.
+- Per-user accounts, multiple client keys with separate quotas, billing, or a management UI. The embedded web UI (section 14) changes no configuration.
 - Prompt or response rewriting beyond the static overrides in section 9.
 - Load-aware or cost-aware scheduling. Routing uses static priority and weight only.
 - Responses resource operations other than creating a response: `GET /v1/responses/{id}`, cancel, delete, input item listing, `background: true` polling, compaction, and the Responses WebSocket transport. These are rejected with 404 in version 1 (section 4.4). The response ownership table (section 7.4) is the foundation for adding them later.
@@ -496,7 +496,7 @@ Pricing exists only to put a cost figure on the usage log. It represents configu
 {"models": {"gpt-image-2": {"cost": {"input": 5, "cache_read": 1.25, "image_input": 8, "image_output": 30}}}}
 ```
 
-The running server reloads the price table when any file under `pricing.cache` or the overrides file changes, checked at most once a minute.
+The running server reloads the price table when any file under `pricing.cache` or the overrides file changes, checked at most once a minute. The Usage view's Sync prices action (section 14) does what `verbatim pricing sync` does inside the running server and installs the new table at once. One sync runs at a time, for at most a minute; a second one asked for meanwhile is refused. A cost is computed when its row is written, so a sync prices new requests only; logged rows keep their cost.
 
 ### 12.2 Lookup
 
@@ -549,7 +549,7 @@ verbatim status                              breaker states, pin count, model-li
 
 ## 14. Web UI
 
-A read-only UI embedded in the binary and served at `/ui/`. It reads the same SQLite database and the gateway's in-memory state, and it edits nothing. The configuration file remains the only source of truth; the UI has no settings, no key management, no provider editing. This is what keeps verbatim from growing into a management system.
+A UI embedded in the binary and served at `/ui/`. It reads the same SQLite database and the gateway's in-memory state. Its one action is a price sync, the same as `verbatim pricing sync`; it changes no configuration and no logged row. The configuration file remains the only source of truth; the UI has no settings, no key management, no provider editing. This is what keeps verbatim from growing into a management system.
 
 Stack: a separate `web/` project built with Vite, React, TypeScript, Tailwind, and shadcn/ui, compiled to static files and embedded with `go:embed`. Node is needed to build the UI, not to run the gateway; the built assets are committed so a Go build never requires Node. The gateway serves the built assets and a small JSON API under `/ui/api/`. If `server.api_key` is set, the UI asks for it once and sends it as a bearer token. Live views poll; there is no push channel. Charts use a small library (uPlot or Recharts); no charting framework beyond that.
 
@@ -559,10 +559,10 @@ Views:
 
 1. **Requests.** One row per request: time, protocol and operation, client model and the provider / upstream model it went to, status and outcome, stream flag, time to first byte and total time, token columns (input, cache read, cache write, output, reasoning), cost, attempt count, and pin state. Filters: time range, protocol, provider, route, status class, outcome, model substring, errors only. A live mode appends new rows by polling.
 2. **Request detail.** Opened from a row. Shows the routing explanation from `routing_json` (matched route, candidates, computed order, ownership, pin state, breaker skips), the attempt timeline from `attempt_log` (provider, status or error, duration, error excerpt for each attempt), the raw usage object, and the cost breakdown: each token column multiplied by the unit price stored in `price_json`, with the total and the `price_key`.
-3. **Usage.** Totals for the selected range and a breakdown by model, provider, route, or day, with a daily chart of cost and tokens. Every aggregate states how many requests in it had no price and how many had no usage, and lists the unpriced model names.
+3. **Usage.** Totals for the selected range and a breakdown by model, provider, route, or day, with a daily chart of cost and tokens. Every aggregate states how many requests in it had no price and how many had no usage, and lists the unpriced model names, with a Sync prices action (section 12.1).
 4. **Providers.** Live state per provider endpoint: breaker closed, open until when, or half-open; consecutive counted failures; committed, failover, and `upstream_error_event` counts over the last hour; active pins; age of the cached model list; log rows dropped.
 
-JSON API, all `GET`: `/ui/api/requests` (filters and cursor pagination), `/ui/api/requests/{id}`, `/ui/api/usage`, `/ui/api/providers`, `/ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in an endpoint's `base_url` redacted).
+JSON API: `GET /ui/api/requests` (filters and cursor pagination), `GET /ui/api/requests/{id}`, `GET /ui/api/usage`, `GET /ui/api/providers`, `GET /ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in an endpoint's `base_url` redacted), and `POST /ui/api/pricing/sync`. The API rejects cross-origin browser requests other than `GET`, `HEAD`, and `OPTIONS` (Go's `http.CrossOriginProtection`), so another site's page cannot start a sync on a loopback server without `server.api_key`.
 
 ## 15. Implementation
 
@@ -624,7 +624,7 @@ In:
 - Providers with configurable auth and headers, routes, selection, failover, breaker, affinity with pin reservation, response ownership, overrides, as specified.
 - SQLite log with usage and cost; `serve`, `check`, `usage`, `log`, `pricing sync`, `pricing show`, `status`.
 - Model listing endpoints with provider discovery.
-- Embedded read-only web UI with the four views of section 14.
+- Embedded web UI with the four views of section 14.
 
 Out, for later:
 

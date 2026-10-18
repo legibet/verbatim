@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"verbatim/internal/config"
+	"verbatim/internal/pricing"
 	"verbatim/internal/proxy"
 	"verbatim/internal/route"
 	"verbatim/internal/store"
@@ -406,5 +407,81 @@ func TestConfigRedacted(t *testing.T) {
 	}
 	if v["log"].(map[string]any)["retention"] != "90d" {
 		t.Errorf("log %v", v["log"])
+	}
+}
+
+func TestPricingSync(t *testing.T) {
+	file := `{"models": {"m1": {"cost": {"input": 1, "output": 2}}}}`
+	started, release := make(chan struct{}), make(chan struct{})
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok.json":
+			fmt.Fprint(w, file)
+		case "/slow.json":
+			close(started)
+			<-release
+			fmt.Fprint(w, file)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer src.Close()
+
+	newSync := func(sources ...string) (http.Handler, **pricing.Table) {
+		cfg := loadConfig(t)
+		cfg.Pricing = config.Pricing{Sources: sources, Cache: t.TempDir()}
+		var installed *pricing.Table
+		reload := func() (*pricing.Table, []string, error) {
+			tbl, warnings, err := pricing.Load(cfg.Pricing.Cache, cfg.Pricing.Sources, "", nil)
+			installed = tbl
+			return tbl, warnings, err
+		}
+		h := New(Options{Store: newStore(t, nil), Stats: func() proxy.Stats { return proxy.Stats{} }, Config: cfg, ReloadPricing: reload})
+		return h, &installed
+	}
+	post := func(h http.Handler, header ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/ui/api/pricing/sync", nil)
+		for i := 0; i < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	h, installed := newSync(src.URL + "/ok.json")
+	if rec := post(h, "Sec-Fetch-Site", "cross-site"); rec.Code != http.StatusForbidden || *installed != nil {
+		t.Errorf("cross-site: status %d, installed %v", rec.Code, *installed != nil)
+	}
+	v := decode[pricingSyncView](t, post(h, "Sec-Fetch-Site", "same-origin"))
+	if v.Models != 1 || v.Warnings == nil {
+		t.Errorf("sync %+v", v)
+	}
+	if *installed == nil {
+		t.Fatal("no table installed")
+	}
+	if _, _, ok := (*installed).Lookup("m1", ""); !ok {
+		t.Error("installed table lacks m1")
+	}
+
+	h, installed = newSync(src.URL+"/ok.json", src.URL+"/missing.json")
+	if rec := post(h); rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "missing.json") || *installed != nil {
+		t.Errorf("failed source: status %d body %s", rec.Code, rec.Body)
+	}
+	h, _ = newSync()
+	if rec := post(h); rec.Code != http.StatusBadRequest {
+		t.Errorf("no sources: status %d", rec.Code)
+	}
+
+	h, _ = newSync(src.URL + "/slow.json")
+	first := make(chan int)
+	go func() { first <- post(h).Code }()
+	<-started
+	if rec := post(h); rec.Code != http.StatusConflict {
+		t.Errorf("sync while one runs: status %d", rec.Code)
+	}
+	close(release)
+	if code := <-first; code != http.StatusOK {
+		t.Errorf("first sync: status %d", code)
 	}
 }

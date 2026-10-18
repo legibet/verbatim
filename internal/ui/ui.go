@@ -1,9 +1,10 @@
-// Package ui serves the read-only web UI (design 14): the embedded static
-// assets under /ui/ and the JSON API under /ui/api/.
+// Package ui serves the web UI (design 14): the embedded static assets under
+// /ui/ and the JSON API under /ui/api/.
 package ui
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
@@ -17,14 +18,20 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"verbatim/internal/config"
+	"verbatim/internal/pricing"
 	"verbatim/internal/proxy"
 	"verbatim/internal/store"
 )
+
+// syncTimeout bounds a price sync from the UI, so that a source that stops
+// answering does not hold the sync forever.
+const syncTimeout = time.Minute
 
 // dist is the built web UI (web/ compiles into it); it is committed so a Go
 // build never needs Node.
@@ -38,15 +45,21 @@ type Options struct {
 	Stats  func() proxy.Stats // live gateway state
 	Config *config.Config     // the loaded configuration; the UI only ever exposes its redacted copy
 	APIKey string             // server.api_key; when set, /ui/api/* requires it as a bearer token
+	// ReloadPricing loads the price table from pricing.cache and installs it.
+	ReloadPricing func() (*pricing.Table, []string, error)
 }
 
 type server struct {
-	store  *store.Store
-	stats  func() proxy.Stats
-	config *config.Config // redacted
-	apiKey string
-	static fs.FS
-	index  []byte
+	store         *store.Store
+	stats         func() proxy.Stats
+	config        *config.Config // redacted
+	pricing       config.Pricing
+	reloadPricing func() (*pricing.Table, []string, error)
+	apiKey        string
+	static        fs.FS
+	index         []byte
+
+	syncing sync.Mutex // held by the running price sync
 }
 
 // New returns the handler for everything under /ui/.
@@ -60,12 +73,14 @@ func New(o Options) http.Handler {
 		panic(fmt.Errorf("embedded UI has no index.html: %w", err))
 	}
 	s := &server{
-		store:  o.Store,
-		stats:  o.Stats,
-		config: o.Config.Redacted(),
-		apiKey: o.APIKey,
-		static: static,
-		index:  index,
+		store:         o.Store,
+		stats:         o.Stats,
+		config:        o.Config.Redacted(),
+		pricing:       o.Config.Pricing,
+		reloadPricing: o.ReloadPricing,
+		apiKey:        o.APIKey,
+		static:        static,
+		index:         index,
 	}
 
 	api := http.NewServeMux()
@@ -74,12 +89,16 @@ func New(o Options) http.Handler {
 	api.HandleFunc("GET /ui/api/usage", s.usage)
 	api.HandleFunc("GET /ui/api/providers", s.providers)
 	api.HandleFunc("GET /ui/api/config", s.configView)
+	api.HandleFunc("POST /ui/api/pricing/sync", s.pricingSync)
 	api.HandleFunc("/ui/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})
 
 	mux := http.NewServeMux()
-	mux.Handle("/ui/api/", s.authorize(api))
+	// Cross-origin protection rejects a POST sent by another site's page in
+	// the browser; on a loopback address without server.api_key nothing else
+	// would stop it.
+	mux.Handle("/ui/api/", http.NewCrossOriginProtection().Handler(s.authorize(api)))
 	mux.HandleFunc("/ui/", s.serveStatic)
 	return mux
 }
@@ -363,6 +382,45 @@ func (s *server) configView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// pricingSyncView is the response of POST /ui/api/pricing/sync.
+type pricingSyncView struct {
+	Models   int      `json:"models"` // in the installed price table
+	Warnings []string `json:"warnings"`
+}
+
+// pricingSync does what `verbatim pricing sync` does and installs the new
+// table at once instead of at the pricing watcher's next check. Rows already
+// logged keep their cost. A sync asked for while one runs is refused, not
+// queued: it would download the same files again.
+func (s *server) pricingSync(w http.ResponseWriter, r *http.Request) {
+	p := s.pricing
+	if len(p.Sources) == 0 {
+		writeError(w, http.StatusBadRequest, "pricing.sources is empty; nothing to sync")
+		return
+	}
+	if !s.syncing.TryLock() {
+		writeError(w, http.StatusConflict, "a price sync is already running")
+		return
+	}
+	defer s.syncing.Unlock()
+	ctx, cancel := context.WithTimeout(r.Context(), syncTimeout)
+	defer cancel()
+	// A failed sync leaves the cache as it was. The usual cause is a source,
+	// hence 502; the message says which source, or pricing.cache.
+	if err := pricing.Sync(ctx, p.Sources, p.Cache); err != nil {
+		slog.Warn("pricing sync failed", "err", err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	t, warnings, err := s.reloadPricing()
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	slog.Info("pricing synced from the web UI", "models", len(t.Models()))
+	writeJSON(w, http.StatusOK, pricingSyncView{Models: len(t.Models()), Warnings: nonNil(warnings)})
 }
 
 // parseTime accepts unix milliseconds (all digits) or RFC 3339; empty is the

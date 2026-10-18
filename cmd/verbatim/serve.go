@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -93,10 +94,24 @@ func runServer(path string) error {
 		Pricing:  prices,
 		Logger:   slog.Default(),
 	})
-	go pricing.Watch(bg, pricingInterval, cfg.Pricing.Cache, cfg.Pricing.Sources, cfg.Pricing.Overrides, cfg.Pricing.Aliases, h.SetPricing)
+	// The watcher and a price sync from the UI both reload the table; one
+	// lock around loading and installing keeps an older table from replacing
+	// a newer one.
+	var pricingMu sync.Mutex
+	reloadPricing := func() (*pricing.Table, []string, error) {
+		pricingMu.Lock()
+		defer pricingMu.Unlock()
+		p := cfg.Pricing
+		t, warnings, err := pricing.Load(p.Cache, p.Sources, p.Overrides, p.Aliases)
+		if err == nil {
+			h.SetPricing(t)
+		}
+		return t, warnings, err
+	}
+	go pricing.Watch(bg, pricingInterval, cfg.Pricing.Cache, cfg.Pricing.Sources, cfg.Pricing.Overrides, reloadPricing)
 
 	mux := http.NewServeMux()
-	mux.Handle("/ui/", ui.New(ui.Options{Store: st, Stats: h.Stats, Config: cfg, APIKey: cfg.Server.APIKey}))
+	mux.Handle("/ui/", ui.New(ui.Options{Store: st, Stats: h.Stats, Config: cfg, APIKey: cfg.Server.APIKey, ReloadPricing: reloadPricing}))
 	mux.Handle("/", h)
 	// No WriteTimeout: streamed responses run as long as the upstream does,
 	// bounded by server.idle_timeout inside the proxy.
