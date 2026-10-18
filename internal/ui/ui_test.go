@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -125,11 +126,12 @@ var testRows = []row{
 
 func newServer(t *testing.T, apiKey string, stats proxy.Stats) http.Handler {
 	t.Helper()
+	cfg := loadConfig(t)
+	cfg.Server.APIKey = apiKey
 	return New(Options{
 		Store:  newStore(t, testRows),
 		Stats:  func() proxy.Stats { return stats },
-		Config: loadConfig(t),
-		APIKey: apiKey,
+		Config: func() *config.Config { return cfg },
 	})
 }
 
@@ -429,6 +431,7 @@ func TestPricingSync(t *testing.T) {
 
 	newSync := func(sources ...string) (http.Handler, **pricing.Table) {
 		cfg := loadConfig(t)
+		cfg.Server.APIKey = ""
 		cfg.Pricing = config.Pricing{Sources: sources, Cache: t.TempDir()}
 		var installed *pricing.Table
 		reload := func() (*pricing.Table, []string, error) {
@@ -436,7 +439,7 @@ func TestPricingSync(t *testing.T) {
 			installed = tbl
 			return tbl, warnings, err
 		}
-		h := New(Options{Store: newStore(t, nil), Stats: func() proxy.Stats { return proxy.Stats{} }, Config: cfg, ReloadPricing: reload})
+		h := New(Options{Store: newStore(t, nil), Stats: func() proxy.Stats { return proxy.Stats{} }, Config: func() *config.Config { return cfg }, ReloadPricing: reload})
 		return h, &installed
 	}
 	post := func(h http.Handler, header ...string) *httptest.ResponseRecorder {
@@ -483,5 +486,46 @@ func TestPricingSync(t *testing.T) {
 	close(release)
 	if code := <-first; code != http.StatusOK {
 		t.Errorf("first sync: status %d", code)
+	}
+}
+
+func TestConfigReload(t *testing.T) {
+	current := loadConfig(t) // api_key: secret-key
+	next := loadConfig(t)
+	next.Server.APIKey = "new-key"
+	fail := true
+	h := New(Options{
+		Store:  newStore(t, nil),
+		Stats:  func() proxy.Stats { return proxy.Stats{} },
+		Config: func() *config.Config { return current },
+		ReloadConfig: func() ([]string, error) {
+			if fail {
+				return nil, errors.New("test.yaml: invalid configuration")
+			}
+			current = next
+			return []string{"config: a warning"}, nil
+		},
+	})
+	post := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/ui/api/config/reload", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := post("secret-key"); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "invalid configuration") {
+		t.Errorf("failed reload: status %d body %s", rec.Code, rec.Body)
+	}
+	fail = false
+	if v := decode[configReloadView](t, post("secret-key")); len(v.Warnings) != 1 {
+		t.Errorf("reload %+v", v)
+	}
+	// The UI serves the reloaded configuration, and with it its key.
+	if rec := get(t, h, "/ui/api/config", "secret-key"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("old key after reload: status %d", rec.Code)
+	}
+	if rec := get(t, h, "/ui/api/config", "new-key"); rec.Code != http.StatusOK {
+		t.Errorf("new key after reload: status %d", rec.Code)
 	}
 }

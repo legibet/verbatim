@@ -5,7 +5,6 @@ package affinity
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"slices"
 
@@ -21,26 +20,10 @@ type Rules struct {
 	fallback string
 }
 
-// Compile checks the affinity configuration and returns the rules.
-func Compile(cfg config.Affinity) (*Rules, error) {
-	if cfg.Fallback != "prefix_hash" && cfg.Fallback != "none" {
-		return nil, fmt.Errorf("affinity.fallback: must be prefix_hash or none, got %q", cfg.Fallback)
-	}
-	known := []protocol.ID{protocol.Chat, protocol.Responses, protocol.Anthropic, protocol.Gemini, protocol.Images}
-	for i, r := range cfg.Rules {
-		if r.Match.Protocol != "" && !slices.Contains(known, protocol.ID(r.Match.Protocol)) {
-			return nil, fmt.Errorf("affinity.rules[%d].match.protocol: unknown protocol %q", i, r.Match.Protocol)
-		}
-		if len(r.Key) == 0 {
-			return nil, fmt.Errorf("affinity.rules[%d].key: at least one source is required", i)
-		}
-		for j, s := range r.Key {
-			if (s.Body == "") == (s.Header == "") {
-				return nil, fmt.Errorf("affinity.rules[%d].key[%d]: exactly one of body or header is required", i, j)
-			}
-		}
-	}
-	return &Rules{rules: slices.Clone(cfg.Rules), fallback: cfg.Fallback}, nil
+// NewRules returns the rules of an affinity configuration that config.Load
+// has validated.
+func NewRules(cfg config.Affinity) *Rules {
+	return &Rules{rules: slices.Clone(cfg.Rules), fallback: cfg.Fallback}
 }
 
 // Key derives the affinity key for a request (design 7.1). The first rule

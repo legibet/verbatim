@@ -108,6 +108,8 @@ export type ConfigView = Record<string, unknown>
 
 export type PricingSync = { models: number; warnings: string[] }
 
+export type ConfigReload = { warnings: string[] }
+
 // JSON-parse boundary: guards check the shape the views rely on; the server
 // is the source of the field types.
 
@@ -125,6 +127,7 @@ export const isProvidersView = (v: unknown): v is ProvidersView =>
 export const isConfigView = (v: unknown): v is ConfigView => isObject(v)
 export const isPricingSync = (v: unknown): v is PricingSync =>
   isObject(v) && typeof v.models === "number" && Array.isArray(v.warnings)
+export const isConfigReload = (v: unknown): v is ConfigReload => isObject(v) && Array.isArray(v.warnings)
 
 // Parsers for the JSON-string columns of a row (routing_json, attempt_log,
 // price_json). A malformed column yields null or an empty list.

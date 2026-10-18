@@ -24,75 +24,57 @@ import (
 	"verbatim/internal/store"
 )
 
-// Options are the gateway's collaborators, all built from one configuration.
+// Options are the gateway's collaborators that outlive a configuration.
 type Options struct {
-	Config   *config.Config
-	Routes   *route.Table
-	Breakers *route.Breakers
-	Pins     *affinity.Pins
-	Rules    *affinity.Rules
-	Store    *store.Store
-	Models   *models.Cache
-	Pricing  *pricing.Table // initial table; SetPricing replaces it; nil prices nothing
-	Logger   *slog.Logger   // nil means slog.Default()
+	Config  *config.Config // the initial configuration; SetConfig replaces it
+	Models  *models.Cache  // the model lists for Config
+	Pins    *affinity.Pins
+	Store   *store.Store
+	Pricing *pricing.Table // initial table; SetPricing replaces it; nil prices nothing
+	Logger  *slog.Logger   // nil means slog.Default()
 }
 
 // Handler serves the data plane: the protocol entry points, the model
 // listings, /healthz, and the Responses operations verbatim rejects. The UI
 // is mounted next to it by the caller.
 type Handler struct {
+	rt      atomic.Pointer[runtime]
+	pins    *affinity.Pins
+	store   *store.Store
+	pricing atomic.Pointer[pricing.Table]
+	log     *slog.Logger
+	// inflight counts forwarded requests against server.max_inflight. It
+	// lives here rather than in the runtime so that requests still running
+	// after a reload keep counting.
+	inflight  atomic.Int64
+	exchanges sync.WaitGroup // forwarded requests that have not yet recorded their row
+	mux       *http.ServeMux
+}
+
+// runtime is everything the handler builds from one configuration. A reload
+// replaces it whole; a request keeps the one it started with, so its attempts
+// and limits all come from one configuration.
+type runtime struct {
 	cfg      *config.Config
 	routes   *route.Table
-	breakers *route.Breakers
-	pins     *affinity.Pins
 	rules    *affinity.Rules
-	store    *store.Store
+	breakers *route.Breakers
 	models   *models.Cache
-	pricing  atomic.Pointer[pricing.Table]
-	log      *slog.Logger
 	// transports holds each endpoint's transport, by config.EndpointName;
 	// endpoints with the same header_timeout share one, and with it their
 	// idle connections.
 	transports map[string]*http.Transport
-	inflight   chan struct{}  // semaphore of server.max_inflight forwarded requests
-	exchanges  sync.WaitGroup // forwarded requests that have not yet recorded their row
-	mux        *http.ServeMux
 }
 
-// New builds the handler and its upstream transports.
+// New builds the handler for o.Config.
 func New(o Options) *Handler {
-	// A transport never asks for or decodes a content encoding, so the client
-	// gets the provider's bytes, and it is used directly rather than through
-	// a Client, so redirects are forwarded, not followed.
-	byTimeout := map[time.Duration]*http.Transport{}
-	transports := map[string]*http.Transport{}
-	for name, p := range o.Config.Providers {
-		for proto, e := range p.Endpoints {
-			d := e.HeaderTimeout.Std()
-			if byTimeout[d] == nil {
-				t := http.DefaultTransport.(*http.Transport).Clone()
-				t.DisableCompression = true
-				t.ResponseHeaderTimeout = d
-				t.MaxIdleConnsPerHost = 32
-				byTimeout[d] = t
-			}
-			transports[config.EndpointName(name, proto)] = byTimeout[d]
-		}
-	}
-
 	h := &Handler{
-		cfg:        o.Config,
-		routes:     o.Routes,
-		breakers:   o.Breakers,
-		pins:       o.Pins,
-		rules:      o.Rules,
-		store:      o.Store,
-		models:     o.Models,
-		log:        cmp.Or(o.Logger, slog.Default()),
-		transports: transports,
-		inflight:   make(chan struct{}, o.Config.Server.MaxInflight),
-		mux:        http.NewServeMux(),
+		pins:  o.Pins,
+		store: o.Store,
+		log:   cmp.Or(o.Logger, slog.Default()),
+		mux:   http.NewServeMux(),
 	}
+	h.SetConfig(o.Config, o.Models)
 	h.pricing.Store(o.Pricing)
 
 	h.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -120,6 +102,41 @@ func New(o Options) *Handler {
 	})
 	return h
 }
+
+// SetConfig installs a configuration, validated by config.Load, and the model
+// lists built for it. Requests already running finish under the previous
+// one. Pins are kept; breaker state and upstream connections start afresh.
+func (h *Handler) SetConfig(cfg *config.Config, mc *models.Cache) {
+	// A transport never asks for or decodes a content encoding, so the client
+	// gets the provider's bytes, and it is used directly rather than through
+	// a Client, so redirects are forwarded, not followed.
+	byTimeout := map[time.Duration]*http.Transport{}
+	transports := map[string]*http.Transport{}
+	for name, p := range cfg.Providers {
+		for proto, e := range p.Endpoints {
+			d := e.HeaderTimeout.Std()
+			if byTimeout[d] == nil {
+				t := http.DefaultTransport.(*http.Transport).Clone()
+				t.DisableCompression = true
+				t.ResponseHeaderTimeout = d
+				t.MaxIdleConnsPerHost = 32
+				byTimeout[d] = t
+			}
+			transports[config.EndpointName(name, proto)] = byTimeout[d]
+		}
+	}
+	h.rt.Store(&runtime{
+		cfg:        cfg,
+		routes:     route.New(cfg),
+		rules:      affinity.NewRules(cfg.Affinity),
+		breakers:   route.NewBreakers(cfg.Breaker.FailureThreshold, cfg.Breaker.Cooldown.Std()),
+		models:     mc,
+		transports: transports,
+	})
+}
+
+// Config returns the configuration new requests are served with.
+func (h *Handler) Config() *config.Config { return h.rt.Load().cfg }
 
 // ServeHTTP tags every response with a request id, sends the protocol entry
 // points to the attempt loop, and everything else to the internal mux. The
@@ -159,19 +176,20 @@ func (h *Handler) SetPricing(t *pricing.Table) { h.pricing.Store(t) }
 
 // Stats returns a snapshot of the gateway's in-memory state.
 func (h *Handler) Stats() Stats {
+	rt := h.rt.Load()
 	return Stats{
-		Breakers:   h.breakers.Snapshot(),
+		Breakers:   rt.breakers.Snapshot(),
 		Pins:       h.pins.ByEndpoint(),
 		PinsTotal:  h.pins.Len(),
-		ModelsAge:  h.models.Ages(),
+		ModelsAge:  rt.models.Ages(),
 		LogDropped: h.store.Dropped(),
 	}
 }
 
 // authorized checks the client key (design 4.1): any one of the four
 // carriers matching is enough.
-func (h *Handler) authorized(r *http.Request) bool {
-	key := []byte(h.cfg.Server.APIKey)
+func (rt *runtime) authorized(r *http.Request) bool {
+	key := []byte(rt.cfg.Server.APIKey)
 	if len(key) == 0 {
 		return true
 	}
@@ -184,7 +202,8 @@ func (h *Handler) authorized(r *http.Request) bool {
 
 // listModels serves the OpenAI/Anthropic superset listing (design 6.5).
 func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
-	if !h.authorized(r) {
+	rt := h.rt.Load()
+	if !rt.authorized(r) {
 		writeError(w, protocol.Lookup(protocol.Chat), http.StatusUnauthorized, "unauthenticated", "missing or invalid API key")
 		return
 	}
@@ -197,7 +216,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"display_name"`
 		CreatedAt   string `json:"created_at"`
 	}
-	names := h.models.Names(r.Context())
+	names := rt.models.Names(r.Context())
 	data := make([]model, 0, len(names))
 	for _, n := range names {
 		data = append(data, model{ID: n, Object: "model", OwnedBy: "verbatim", Type: "model", DisplayName: n, CreatedAt: "1970-01-01T00:00:00Z"})
@@ -217,7 +236,8 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 
 // listGeminiModels serves the listing in Gemini's shape.
 func (h *Handler) listGeminiModels(w http.ResponseWriter, r *http.Request) {
-	if !h.authorized(r) {
+	rt := h.rt.Load()
+	if !rt.authorized(r) {
 		writeError(w, protocol.Lookup(protocol.Gemini), http.StatusUnauthorized, "unauthenticated", "missing or invalid API key")
 		return
 	}
@@ -225,7 +245,7 @@ func (h *Handler) listGeminiModels(w http.ResponseWriter, r *http.Request) {
 		Name        string `json:"name"`
 		DisplayName string `json:"displayName"`
 	}
-	names := h.models.Names(r.Context())
+	names := rt.models.Names(r.Context())
 	list := make([]model, 0, len(names))
 	for _, n := range names {
 		list = append(list, model{Name: "models/" + n, DisplayName: n})

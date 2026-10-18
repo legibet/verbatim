@@ -57,6 +57,7 @@ const (
 // row it fills in.
 type exchange struct {
 	h     *Handler
+	rt    *runtime
 	w     http.ResponseWriter
 	r     *http.Request
 	proto protocol.Protocol
@@ -135,7 +136,8 @@ func newRequestID() string { return strings.ToLower(rand.Text()) }
 // Requests that fail client authentication are answered but not logged, so
 // that unauthenticated clients cannot write to the database.
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, id string, p protocol.Protocol, op protocol.Operation) {
-	if !h.authorized(r) {
+	rt := h.rt.Load()
+	if !rt.authorized(r) {
 		writeError(w, p, http.StatusUnauthorized, "unauthenticated", "missing or invalid API key")
 		return
 	}
@@ -143,7 +145,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, id string, p p
 	defer h.exchanges.Done()
 	start := time.Now()
 	x := &exchange{
-		h: h, w: w, r: r, proto: p, op: op, start: start,
+		h: h, rt: rt, w: w, r: r, proto: p, op: op, start: start,
 		row: store.Request{TS: start, RequestID: id, Protocol: string(p.ID()), Operation: string(op)},
 		routing: routingJSON{
 			Candidates:  []candidateJSON{},
@@ -163,19 +165,17 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, id string, p p
 }
 
 func (x *exchange) run() {
-	h := x.h
-	select {
-	case h.inflight <- struct{}{}:
-		defer func() { <-h.inflight }()
-	default:
-		x.fail(http.StatusServiceUnavailable, "too_many_inflight", fmt.Sprintf("more than %d requests in flight", cap(h.inflight)))
+	rt := x.rt
+	defer x.h.inflight.Add(-1)
+	if limit := rt.cfg.Server.MaxInflight; x.h.inflight.Add(1) > int64(limit) {
+		x.fail(http.StatusServiceUnavailable, "too_many_inflight", fmt.Sprintf("more than %d requests in flight", limit))
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(x.w, x.r.Body, h.cfg.Server.MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(x.w, x.r.Body, rt.cfg.Server.MaxBodyBytes))
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			x.fail(http.StatusRequestEntityTooLarge, "body_too_large", fmt.Sprintf("request body exceeds %d bytes", h.cfg.Server.MaxBodyBytes))
+			x.fail(http.StatusRequestEntityTooLarge, "body_too_large", fmt.Sprintf("request body exceeds %d bytes", rt.cfg.Server.MaxBodyBytes))
 			return
 		}
 		x.cancelled(fmt.Sprintf("read request body: %v", err))
@@ -190,7 +190,7 @@ func (x *exchange) run() {
 	x.row.ClientModel = model
 	x.row.Stream = x.proto.Stream(body, contentType)
 
-	routeName, cands, ok := h.routes.Match(x.proto.ID(), model)
+	routeName, cands, ok := rt.routes.Match(x.proto.ID(), model)
 	if !ok {
 		x.fail(http.StatusNotFound, "no_route", fmt.Sprintf("no route serves model %q over the %s protocol", model, x.proto.ID()))
 		return
@@ -215,7 +215,7 @@ func (x *exchange) run() {
 // 7). It reports false after answering the client itself.
 func (x *exchange) order(body []byte, model, routeName string, cands []route.Candidate) ([]route.Candidate, bool) {
 	h := x.h
-	key, source, hasKey := h.rules.Key(x.proto, model, x.r.Header, body)
+	key, source, hasKey := x.rt.rules.Key(x.proto, model, x.r.Header, body)
 	if hasKey {
 		x.row.AffinityKey = &key
 		x.routing.Pin.Source = source
@@ -236,7 +236,7 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 				fmt.Sprintf("response %q was not produced through this gateway, or its record has expired", id))
 			return nil, false
 		}
-		if _, ok := h.cfg.Providers[provider].Endpoints[string(x.proto.ID())]; !ok {
+		if _, ok := x.rt.cfg.Providers[provider].Endpoints[string(x.proto.ID())]; !ok {
 			x.fail(http.StatusNotFound, "unknown_response_id",
 				fmt.Sprintf("response %q belongs to provider %q, which no longer has a %s endpoint", id, provider, x.proto.ID()))
 			return nil, false
@@ -249,7 +249,7 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 		return []route.Candidate{owner}, true
 	}
 
-	order := h.routes.Order(routeName, x.proto.ID(), cands)
+	order := x.rt.routes.Order(routeName, x.proto.ID(), cands)
 	if !hasKey {
 		return order, true
 	}
@@ -273,7 +273,7 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 	case slices.ContainsFunc(order, func(c route.Candidate) bool { return c.TargetID == x.pin.target }):
 		x.routing.Pin.State = pinHit
 		order = route.Front(order, x.pin.target)
-		if h.cfg.Affinity.Mode == "strict" {
+		if x.rt.cfg.Affinity.Mode == "strict" {
 			// strict: the pinned target's failure is the request's result.
 			order = order[:1]
 		}
@@ -317,7 +317,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			continue
 		}
 		endpoint := config.EndpointName(c.Provider, string(x.proto.ID()))
-		admitted, probe := h.breakers.Admit(endpoint)
+		admitted, probe := x.rt.breakers.Admit(endpoint)
 		if !admitted {
 			x.routing.SkippedOpen = append(x.routing.SkippedOpen, c.Provider)
 			failures = append(failures, c.Provider+": breaker open")
@@ -326,7 +326,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		x.setTarget(c.TargetID)
 		sent := time.Now()
 		a := attemptJSON{Provider: c.Provider, UpstreamModel: c.Model}
-		resp, err := h.transports[endpoint].RoundTrip(req)
+		resp, err := x.rt.transports[endpoint].RoundTrip(req)
 		if err != nil {
 			a.MS = time.Since(sent).Milliseconds()
 			if x.r.Context().Err() != nil {
@@ -354,7 +354,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			if x.op.Auxiliary() {
 				x.verdict(endpoint, probe, false)
 			} else {
-				h.breakers.Success(endpoint)
+				x.rt.breakers.Success(endpoint)
 			}
 			x.commitPin(c.TargetID)
 			x.commit(resp, c)
@@ -363,7 +363,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 
 		last = x.drain(resp)
 		a.MS = time.Since(sent).Milliseconds()
-		a.Excerpt = excerpt(last.body, last.header, h.cfg.Log.ErrorExcerptBytes)
+		a.Excerpt = excerpt(last.body, last.header, x.rt.cfg.Log.ErrorExcerptBytes)
 		x.attempts = append(x.attempts, a)
 		x.verdict(endpoint, probe, counted(resp.StatusCode))
 		failures = append(failures, fmt.Sprintf("%s: HTTP %d", c.Provider, resp.StatusCode))
@@ -416,9 +416,9 @@ func counted(status int) bool {
 // abandoned so the next request can probe.
 func (x *exchange) verdict(endpoint string, probe, failure bool) {
 	if failure && !x.op.Auxiliary() {
-		x.h.breakers.Failure(endpoint, probe)
+		x.rt.breakers.Failure(endpoint, probe)
 	} else if probe {
-		x.h.breakers.Abandon(endpoint)
+		x.rt.breakers.Abandon(endpoint)
 	}
 }
 
@@ -450,7 +450,7 @@ func (x *exchange) releasePin() {
 // build makes the attempt's upstream request from the original client
 // request (design 4.2): model name, overrides, URL, and headers.
 func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) {
-	p := x.h.cfg.Providers[c.Provider]
+	p := x.rt.cfg.Providers[c.Provider]
 	e := p.Endpoints[string(x.proto.ID())]
 	var err error
 	if c.Model != x.row.ClientModel {
@@ -549,7 +549,7 @@ func copyEndToEnd(dst, src http.Header, drop ...string) {
 // timeout, and closes it.
 func (x *exchange) drain(resp *http.Response) *failedResponse {
 	defer resp.Body.Close()
-	b := &idleBody{rc: resp.Body, d: x.h.cfg.Server.IdleTimeout.Std()}
+	b := &idleBody{rc: resp.Body, d: x.rt.cfg.Server.IdleTimeout.Std()}
 	defer b.stop()
 	body, err := io.ReadAll(io.LimitReader(b, maxErrorBody+1))
 	complete := err == nil && len(body) <= maxErrorBody
@@ -594,7 +594,7 @@ func upstreamRequestID(h http.Header) *string {
 // x-verbatim-attempts (design 8.4).
 func (x *exchange) returnLast(last *failedResponse) {
 	x.writeHead(last.status, last.header, last.trailer)
-	x.row.Error = new(excerpt(last.body, last.header, x.h.cfg.Log.ErrorExcerptBytes))
+	x.row.Error = new(excerpt(last.body, last.header, x.rt.cfg.Log.ErrorExcerptBytes))
 	switch _, err := x.w.Write(last.body); {
 	case err != nil:
 		x.cancelled("client went away: " + err.Error())
@@ -633,13 +633,13 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 	var errBody []byte
 	errMax := 0
 	if resp.StatusCode >= 400 {
-		errMax = h.cfg.Log.ErrorExcerptBytes
+		errMax = x.rt.cfg.Log.ErrorExcerptBytes
 		if resp.Header.Get("Content-Encoding") != "" {
 			errMax = min(maxErrorBody, 16*errMax)
 		}
 	}
 	rc := http.NewResponseController(x.w)
-	body := &idleBody{rc: resp.Body, d: h.cfg.Server.IdleTimeout.Std()}
+	body := &idleBody{rc: resp.Body, d: x.rt.cfg.Server.IdleTimeout.Std()}
 	defer body.stop()
 	buf := make([]byte, 32<<10)
 	for {
@@ -672,7 +672,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 			case x.r.Context().Err() != nil:
 				x.cancelled("client went away")
 			case body.expired.Load():
-				x.truncated(fmt.Sprintf("upstream body idle for %s", h.cfg.Server.IdleTimeout))
+				x.truncated(fmt.Sprintf("upstream body idle for %s", x.rt.cfg.Server.IdleTimeout))
 			default:
 				x.truncated("read upstream body: " + err.Error())
 			}
@@ -689,7 +689,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 		x.row.Outcome = outcomeErrorEvent
 	}
 	if len(errBody) > 0 {
-		x.row.Error = new(excerpt(errBody, resp.Header, h.cfg.Log.ErrorExcerptBytes))
+		x.row.Error = new(excerpt(errBody, resp.Header, x.rt.cfg.Log.ErrorExcerptBytes))
 	}
 	x.setUsage(tee, c)
 }

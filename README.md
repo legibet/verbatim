@@ -102,6 +102,8 @@ See `verbatim.example.yaml`. The sections:
 
 `${VAR}` in any value is expanded from the environment; an unset variable is an error. Unknown keys are errors. `verbatim check` lists every problem it finds.
 
+The running server reads the file again on `SIGHUP` (`pkill -HUP verbatim`) or on Reload config in the web UI. The whole file applies or none of it: a file with errors, or one that changes `server.listen`, `log.path`, `log.retention`, or `affinity.ttl` (those need a restart), is refused and the previous configuration keeps serving. Running requests finish under the configuration they started with; session pins are kept.
+
 ## CLI
 
 ```
@@ -119,7 +121,7 @@ verbatim status                          live endpoint state from the running se
 
 ## Web UI
 
-`http://<listen>/ui/`. It shows the request log and the server's live state (breakers, pins, model-list age). Its one action is Sync prices on the Usage view, the same as `verbatim pricing sync`; it changes no configuration. If `server.api_key` is set, the UI asks for it once. Views: Requests (filters, live tail, detail drawer with the routing explanation, attempt timeline, raw usage, cost breakdown), Usage (totals, daily chart, breakdown by model / provider / route / day, unpriced models), Providers.
+`http://<listen>/ui/`. It shows the request log and the server's live state (breakers, pins, model-list age). Its two actions are Sync prices on the Usage view, the same as `verbatim pricing sync`, and Reload config on the Providers view, the same as `SIGHUP`; neither changes the configuration file. If `server.api_key` is set, the UI asks for it once. Views: Requests (filters, live tail, detail drawer with the routing explanation, attempt timeline, raw usage, cost breakdown), Usage (totals, daily chart, breakdown by model / provider / route / day, unpriced models), Providers (live endpoint state and the served configuration).
 
 ## Pricing
 

@@ -19,7 +19,6 @@ import (
 	"verbatim/internal/models"
 	"verbatim/internal/pricing"
 	"verbatim/internal/proxy"
-	"verbatim/internal/route"
 	"verbatim/internal/store"
 	"verbatim/internal/ui"
 )
@@ -64,10 +63,6 @@ func runServer(path string) error {
 	for _, w := range warnings {
 		slog.Warn("config: " + w.String())
 	}
-	rules, err := affinity.Compile(cfg.Affinity)
-	if err != nil {
-		return err
-	}
 	prices := loadPricing(cfg)
 
 	st, err := store.Open(cfg.Log.Path, cfg.Log.Retention.Std())
@@ -80,38 +75,88 @@ func runServer(path string) error {
 	// watcher keep running while in-flight requests drain.
 	bg, stopBG := context.WithCancel(context.Background())
 	defer stopBG()
-	mc := models.New(cfg, http.DefaultTransport, cfg.Models.CacheTTL.Std(), cfg.Models.Timeout.Std())
-	mc.Start(bg)
-
+	mc := newModels(cfg)
 	h := proxy.New(proxy.Options{
-		Config:   cfg,
-		Routes:   route.New(cfg),
-		Breakers: route.NewBreakers(cfg.Breaker.FailureThreshold, cfg.Breaker.Cooldown.Std()),
-		Pins:     affinity.NewPins(cfg.Affinity.TTL.Std(), maxPins),
-		Rules:    rules,
-		Store:    st,
-		Models:   mc,
-		Pricing:  prices,
-		Logger:   slog.Default(),
+		Config:  cfg,
+		Models:  mc,
+		Pins:    affinity.NewPins(cfg.Affinity.TTL.Std(), maxPins),
+		Store:   st,
+		Pricing: prices,
+		Logger:  slog.Default(),
 	})
-	// The watcher and a price sync from the UI both reload the table; one
-	// lock around loading and installing keeps an older table from replacing
-	// a newer one.
+	// The watcher, a price sync from the UI and a configuration reload all
+	// reload the table; one lock around loading and installing keeps an
+	// older table from replacing a newer one.
 	var pricingMu sync.Mutex
 	reloadPricing := func() (*pricing.Table, []string, error) {
 		pricingMu.Lock()
 		defer pricingMu.Unlock()
-		p := cfg.Pricing
+		p := h.Config().Pricing
 		t, warnings, err := pricing.Load(p.Cache, p.Sources, p.Overrides, p.Aliases)
 		if err == nil {
 			h.SetPricing(t)
 		}
 		return t, warnings, err
 	}
-	go pricing.Watch(bg, pricingInterval, cfg.Pricing.Cache, cfg.Pricing.Sources, cfg.Pricing.Overrides, reloadPricing)
+	// start runs a configuration's background work, its model list
+	// refreshes and the pricing watcher, until the next one starts.
+	stopCurrent := func() {}
+	start := func(cfg *config.Config, mc *models.Cache) {
+		stopCurrent()
+		ctx, cancel := context.WithCancel(bg)
+		stopCurrent = cancel
+		mc.Start(ctx)
+		go pricing.Watch(ctx, pricingInterval, cfg.Pricing.Cache, cfg.Pricing.Sources, cfg.Pricing.Overrides, reloadPricing)
+	}
+	start(cfg, mc)
+
+	// SIGHUP and the UI both reload the configuration; one at a time.
+	var configMu sync.Mutex
+	reloadConfig := func() ([]string, error) {
+		configMu.Lock()
+		defer configMu.Unlock()
+		next, cw, err := config.Load(path)
+		if err == nil {
+			if changed := restartOnly(h.Config(), next); len(changed) > 0 {
+				err = fmt.Errorf("%s changed; restart verbatim to apply the new configuration", strings.Join(changed, ", "))
+			}
+		}
+		if err != nil {
+			slog.Warn("configuration not reloaded; still serving the previous one", "err", err)
+			return nil, err
+		}
+		mc := newModels(next)
+		start(next, mc)
+		h.SetConfig(next, mc)
+		var warnings []string
+		for _, w := range cw {
+			warnings = append(warnings, "config: "+w.String())
+		}
+		// The pricing section may have changed with the rest.
+		if _, pw, err := reloadPricing(); err != nil {
+			warnings = append(warnings, "pricing: table not reloaded; keeping the previous one: "+err.Error())
+		} else {
+			for _, w := range pw {
+				warnings = append(warnings, "pricing: "+w)
+			}
+		}
+		for _, w := range warnings {
+			slog.Warn(w)
+		}
+		slog.Info("configuration reloaded", "providers", len(next.Providers), "routes", len(next.Routes))
+		return warnings, nil
+	}
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for range hup {
+			reloadConfig()
+		}
+	}()
 
 	mux := http.NewServeMux()
-	mux.Handle("/ui/", ui.New(ui.Options{Store: st, Stats: h.Stats, Config: cfg, APIKey: cfg.Server.APIKey, ReloadPricing: reloadPricing}))
+	mux.Handle("/ui/", ui.New(ui.Options{Store: st, Stats: h.Stats, Config: h.Config, ReloadPricing: reloadPricing, ReloadConfig: reloadConfig}))
 	mux.Handle("/", h)
 	// No WriteTimeout: streamed responses run as long as the upstream does,
 	// bounded by server.idle_timeout inside the proxy.
@@ -154,6 +199,30 @@ func runServer(path string) error {
 	}
 	slog.Info("stopped")
 	return nil
+}
+
+func newModels(cfg *config.Config) *models.Cache {
+	return models.New(cfg, http.DefaultTransport, cfg.Models.CacheTTL.Std(), cfg.Models.Timeout.Std())
+}
+
+// restartOnly names the settings changed from old to next that a running
+// server keeps: its listener, its log database, and its pin store.
+func restartOnly(old, next *config.Config) []string {
+	var names []string
+	for _, f := range []struct {
+		name    string
+		changed bool
+	}{
+		{"server.listen", old.Server.Listen != next.Server.Listen},
+		{"log.path", old.Log.Path != next.Log.Path},
+		{"log.retention", old.Log.Retention != next.Log.Retention},
+		{"affinity.ttl", old.Affinity.TTL != next.Affinity.TTL},
+	} {
+		if f.changed {
+			names = append(names, f.name)
+		}
+	}
+	return names
 }
 
 // loadPricing loads the price table for serving. Pricing only labels the log

@@ -41,21 +41,25 @@ var dist embed.FS
 
 // Options are the UI's data sources.
 type Options struct {
-	Store  *store.Store
-	Stats  func() proxy.Stats // live gateway state
-	Config *config.Config     // the loaded configuration; the UI only ever exposes its redacted copy
-	APIKey string             // server.api_key; when set, /ui/api/* requires it as a bearer token
+	Store *store.Store
+	Stats func() proxy.Stats // live gateway state
+	// Config returns the configuration being served. The UI only ever
+	// exposes its redacted copy; when its server.api_key is set, /ui/api/*
+	// requires it as a bearer token.
+	Config func() *config.Config
 	// ReloadPricing loads the price table from pricing.cache and installs it.
 	ReloadPricing func() (*pricing.Table, []string, error)
+	// ReloadConfig reads the configuration file again and serves it,
+	// returning its warnings; on an error the running configuration stays.
+	ReloadConfig func() ([]string, error)
 }
 
 type server struct {
 	store         *store.Store
 	stats         func() proxy.Stats
-	config        *config.Config // redacted
-	pricing       config.Pricing
+	config        func() *config.Config
 	reloadPricing func() (*pricing.Table, []string, error)
-	apiKey        string
+	reloadConfig  func() ([]string, error)
 	static        fs.FS
 	index         []byte
 
@@ -75,10 +79,9 @@ func New(o Options) http.Handler {
 	s := &server{
 		store:         o.Store,
 		stats:         o.Stats,
-		config:        o.Config.Redacted(),
-		pricing:       o.Config.Pricing,
+		config:        o.Config,
 		reloadPricing: o.ReloadPricing,
-		apiKey:        o.APIKey,
+		reloadConfig:  o.ReloadConfig,
 		static:        static,
 		index:         index,
 	}
@@ -89,6 +92,7 @@ func New(o Options) http.Handler {
 	api.HandleFunc("GET /ui/api/usage", s.usage)
 	api.HandleFunc("GET /ui/api/providers", s.providers)
 	api.HandleFunc("GET /ui/api/config", s.configView)
+	api.HandleFunc("POST /ui/api/config/reload", s.configReload)
 	api.HandleFunc("POST /ui/api/pricing/sync", s.pricingSync)
 	api.HandleFunc("/ui/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -107,12 +111,10 @@ func New(o Options) http.Handler {
 // static assets stay public: they hold no data, and the page needs to load
 // to ask for the key.
 func (s *server) authorize(next http.Handler) http.Handler {
-	if s.apiKey == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := s.config().Server.APIKey
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.apiKey)) != 1 {
+		if key != "" && (!ok || subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1) {
 			writeError(w, http.StatusUnauthorized, "unauthenticated")
 			return
 		}
@@ -336,9 +338,10 @@ func (s *server) providers(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
+	cfg := s.config().Redacted()
 	v := ProvidersView{Endpoints: []EndpointView{}, LogDropped: st.LogDropped, PinsTotal: st.PinsTotal}
-	for _, name := range slices.Sorted(maps.Keys(s.config.Providers)) {
-		p := s.config.Providers[name]
+	for _, name := range slices.Sorted(maps.Keys(cfg.Providers)) {
+		p := cfg.Providers[name]
 		for _, proto := range slices.Sorted(maps.Keys(p.Endpoints)) {
 			ep := config.EndpointName(name, proto)
 			c := counts[store.Endpoint{Provider: name, Protocol: proto}]
@@ -371,7 +374,7 @@ func (s *server) providers(w http.ResponseWriter, r *http.Request) {
 // only yaml tags, so it goes through YAML to keep the file's own key names
 // and duration syntax.
 func (s *server) configView(w http.ResponseWriter, r *http.Request) {
-	b, err := yaml.Marshal(s.config)
+	b, err := yaml.Marshal(s.config().Redacted())
 	if err != nil {
 		s.internalError(w, err)
 		return
@@ -382,6 +385,23 @@ func (s *server) configView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// configReloadView is the response of POST /ui/api/config/reload.
+type configReloadView struct {
+	Warnings []string `json:"warnings"`
+}
+
+// configReload does what SIGHUP does: it reads the configuration file again
+// and serves it. A file that cannot be served as a whole is refused, hence
+// 422, and the running configuration stays.
+func (s *server) configReload(w http.ResponseWriter, r *http.Request) {
+	warnings, err := s.reloadConfig()
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, configReloadView{Warnings: nonNil(warnings)})
 }
 
 // pricingSyncView is the response of POST /ui/api/pricing/sync.
@@ -395,7 +415,7 @@ type pricingSyncView struct {
 // logged keep their cost. A sync asked for while one runs is refused, not
 // queued: it would download the same files again.
 func (s *server) pricingSync(w http.ResponseWriter, r *http.Request) {
-	p := s.pricing
+	p := s.config().Pricing
 	if len(p.Sources) == 0 {
 		writeError(w, http.StatusBadRequest, "pricing.sources is empty; nothing to sync")
 		return

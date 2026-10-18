@@ -118,7 +118,7 @@ Failover is decided on the upstream status line and headers, before anything is 
 
 ## 6. Configuration
 
-One YAML file. `${ENV_VAR}` in any string value is expanded from the environment at load time; an unset variable is a validation error, never an empty string. A leading `~/` in a path is the user's home directory. The file is validated at startup; any reference to an undefined provider, duplicate route pattern, unknown field, or invalid override is a startup error.
+One YAML file. `${ENV_VAR}` in any string value is expanded from the environment at load time; an unset variable is a validation error, never an empty string. A leading `~/` in a path is the user's home directory. The file is validated at startup; any reference to an undefined provider, duplicate route pattern, unknown field, or invalid override is a startup error. The running server reads it again on request (section 6.6).
 
 ### 6.1 Full example
 
@@ -292,7 +292,7 @@ Many clients populate their model picker from `/v1/models`, so the list has to b
 
 Names are deduplicated; the first occurrence wins. The response lists names only; it does not promise that every listed name works for every protocol.
 
-Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2) (for `gemini`, ids are returned with the `models/` prefix stripped). Where the protocol pages the list, verbatim asks for the largest page it allows (`anthropic`: `limit=1000`; `gemini`: `pageSize=1000`) and follows the next-page cursor up to 10 pages: `has_more` and `last_id` sent back as `after_id` for `anthropic` and for OpenAI-compatible relays that page, `nextPageToken` sent back as `pageToken` for `gemini`. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the startup round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup does not get an empty list.
+Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2) (for `gemini`, ids are returned with the `models/` prefix stripped). Where the protocol pages the list, verbatim asks for the largest page it allows (`anthropic`: `limit=1000`; `gemini`: `pageSize=1000`) and follows the next-page cursor up to 10 pages: `has_more` and `last_id` sent back as `after_id` for `anthropic` and for OpenAI-compatible relays that page, `nextPageToken` sent back as `pageToken` for `gemini`. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup and after a configuration reload, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and a warning is logged. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the first round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup or a reload does not get an empty list.
 
 Response shape: one entry per name carrying the union of what OpenAI and Anthropic clients read, so either parser is satisfied and ignores the rest:
 
@@ -303,6 +303,12 @@ Response shape: one entry per name carrying the union of what OpenAI and Anthrop
 ```
 
 The Gemini listing uses Gemini's shape (`{"models":[{"name":"models/<id>", ...}]}`).
+
+### 6.6 Reloading
+
+The running server reads the file again on `SIGHUP` or on the Providers view's Reload config action (section 14). The file is not watched: an editor can save a half-finished change that still validates.
+
+A reload applies the whole file or nothing. A file that fails validation is refused, and so is one that changes `server.listen`, `log.path`, `log.retention`, or `affinity.ttl`, which only a restart applies; the previous configuration keeps serving and the reason is logged and shown. Otherwise new requests are served with the new configuration at once, and requests already running finish under the one they started with. Pins are kept, so a session stays on its target wherever the new routes still offer it (section 7.2). Circuit breakers start closed, model lists are fetched again, and the price table is reloaded from `pricing.cache` with the new pricing settings.
 
 ## 7. Session affinity
 
@@ -330,7 +336,7 @@ The pin key is (protocol, affinity key, client model name). One session usually 
 
 The pin is **reserved at selection time**, not after success: when a request finds no pin, it reserves one for the target it is about to attempt, atomically against concurrent requests for the same key, so two parallel first requests of a session (agent clients routinely fire several at start) land on the same target. If the attempt fails over, the pin moves to the target that eventually gets committed. If the request fails entirely and no request has yet committed a response under this pin, the reservation is released; a pin that has served a committed response stays.
 
-Pins live in an in-process map with LRU eviction and `affinity.ttl` expiry, refreshed on every use. They do not survive a restart; after a restart, the first request of a session re-pins by ordinary selection, and the client handles any resulting signature error (Claude Code strips earlier thinking and retries; other clients fail the turn). `affinity.ttl` should be at least as long as the longest pause within a working session.
+Pins live in an in-process map with LRU eviction and `affinity.ttl` expiry, refreshed on every use. They survive a configuration reload (section 6.6) but not a restart; after a restart, the first request of a session re-pins by ordinary selection, and the client handles any resulting signature error (Claude Code strips earlier thinking and retries; other clients fail the turn). `affinity.ttl` should be at least as long as the longest pause within a working session.
 
 ### 7.3 Modes
 
@@ -545,11 +551,11 @@ verbatim pricing show <model>
 verbatim status                              breaker states, pin count, model-list ages (asks the running server)
 ```
 
-`usage` and `log` read the SQLite file directly and work while `serve` is running. `status` calls the running server's `/ui/api/providers`, because breakers and pins live in its memory. The CLI is the quick path; the web UI is the primary way to inspect traffic.
+`serve` reads its configuration file again on `SIGHUP` (section 6.6). `usage` and `log` read the SQLite file directly and work while `serve` is running. `status` calls the running server's `/ui/api/providers`, because breakers and pins live in its memory. The CLI is the quick path; the web UI is the primary way to inspect traffic.
 
 ## 14. Web UI
 
-A UI embedded in the binary and served at `/ui/`. It reads the same SQLite database and the gateway's in-memory state. Its one action is a price sync, the same as `verbatim pricing sync`; it changes no configuration and no logged row. The configuration file remains the only source of truth; the UI has no settings, no key management, no provider editing. This is what keeps verbatim from growing into a management system.
+A UI embedded in the binary and served at `/ui/`. It reads the same SQLite database and the gateway's in-memory state. It has two actions: a price sync, the same as `verbatim pricing sync`, and a configuration reload, the same as `SIGHUP`. Neither changes the configuration file or a logged row. The configuration file remains the only source of truth; the UI has no settings, no key management, no provider editing. This is what keeps verbatim from growing into a management system.
 
 Stack: a separate `web/` project built with Vite, React, TypeScript, Tailwind, and shadcn/ui, compiled to static files and embedded with `go:embed`. Node is needed to build the UI, not to run the gateway; the built assets are committed so a Go build never requires Node. The gateway serves the built assets and a small JSON API under `/ui/api/`. If `server.api_key` is set, the UI asks for it once and sends it as a bearer token. Live views poll; there is no push channel. Charts use a small library (uPlot or Recharts); no charting framework beyond that.
 
@@ -560,9 +566,9 @@ Views:
 1. **Requests.** One row per request: time, protocol and operation, client model and the provider / upstream model it went to, status and outcome, stream flag, time to first byte and total time, token columns (input, cache read, cache write, output, reasoning), cost, attempt count, and pin state. Filters: time range, protocol, provider, route, status class, outcome, model substring, errors only. A live mode appends new rows by polling.
 2. **Request detail.** Opened from a row. Shows the routing explanation from `routing_json` (matched route, candidates, computed order, ownership, pin state, breaker skips), the attempt timeline from `attempt_log` (provider, status or error, duration, error excerpt for each attempt), the raw usage object, and the cost breakdown: each token column multiplied by the unit price stored in `price_json`, with the total and the `price_key`.
 3. **Usage.** Totals for the selected range and a breakdown by model, provider, route, or day, with a daily chart of cost and tokens. Every aggregate states how many requests in it had no price and how many had no usage, and lists the unpriced model names, with a Sync prices action (section 12.1).
-4. **Providers.** Live state per provider endpoint: breaker closed, open until when, or half-open; consecutive counted failures; committed, failover, and `upstream_error_event` counts over the last hour; active pins; age of the cached model list; log rows dropped.
+4. **Providers.** Live state per provider endpoint: breaker closed, open until when, or half-open; consecutive counted failures; committed, failover, and `upstream_error_event` counts over the last hour; active pins; age of the cached model list; log rows dropped. Below it, the served configuration, redacted, with the Reload config action (section 6.6).
 
-JSON API: `GET /ui/api/requests` (filters and cursor pagination), `GET /ui/api/requests/{id}`, `GET /ui/api/usage`, `GET /ui/api/providers`, `GET /ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in an endpoint's `base_url` redacted), and `POST /ui/api/pricing/sync`. The API rejects cross-origin browser requests other than `GET`, `HEAD`, and `OPTIONS` (Go's `http.CrossOriginProtection`), so another site's page cannot start a sync on a loopback server without `server.api_key`.
+JSON API: `GET /ui/api/requests` (filters and cursor pagination), `GET /ui/api/requests/{id}`, `GET /ui/api/usage`, `GET /ui/api/providers`, `GET /ui/api/config` (the loaded configuration for display, with `key` values, every `headers` value, and any userinfo or query in an endpoint's `base_url` redacted), `POST /ui/api/pricing/sync`, and `POST /ui/api/config/reload` (the reloaded file's warnings, or 422 with the reason it was refused). The API rejects cross-origin browser requests other than `GET`, `HEAD`, and `OPTIONS` (Go's `http.CrossOriginProtection`), so another site's page cannot start a sync or a reload on a loopback server without `server.api_key`.
 
 ## 15. Implementation
 
@@ -624,6 +630,7 @@ In:
 - Providers with configurable auth and headers, routes, selection, failover, breaker, affinity with pin reservation, response ownership, overrides, as specified.
 - SQLite log with usage and cost; `serve`, `check`, `usage`, `log`, `pricing sync`, `pricing show`, `status`.
 - Model listing endpoints with provider discovery.
+- Configuration reload on `SIGHUP` and from the web UI.
 - Embedded web UI with the four views of section 14.
 
 Out, for later:

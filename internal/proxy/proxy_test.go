@@ -30,7 +30,6 @@ import (
 	"verbatim/internal/models"
 	"verbatim/internal/pricing"
 	"verbatim/internal/protocol"
-	"verbatim/internal/route"
 	"verbatim/internal/store"
 )
 
@@ -124,18 +123,11 @@ func newGateway(t *testing.T, yaml string, opts ...func(*Options)) *gateway {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	rules, err := affinity.Compile(cfg.Affinity)
-	if err != nil {
-		t.Fatal(err)
-	}
 	o := Options{
-		Config:   cfg,
-		Routes:   route.New(cfg),
-		Breakers: route.NewBreakers(cfg.Breaker.FailureThreshold, cfg.Breaker.Cooldown.Std()),
-		Pins:     affinity.NewPins(cfg.Affinity.TTL.Std(), 1000),
-		Rules:    rules,
-		Store:    st,
-		Models:   models.New(cfg, nil, time.Minute, time.Second),
+		Config: cfg,
+		Models: models.New(cfg, nil, time.Minute, time.Second),
+		Pins:   affinity.NewPins(cfg.Affinity.TTL.Std(), 1000),
+		Store:  st,
 	}
 	for _, f := range opts {
 		f(&o)
@@ -727,7 +719,7 @@ func TestBreaker(t *testing.T) {
 	})
 	b := newUpstream(t, reply(200, `{"from":"b"}`))
 	g := newGateway(t, twoTargets(a.URL, b.URL, "breaker:\n  failure_threshold: 2\n  cooldown: 200ms\n"+noAffinity))
-	breakers := g.h.breakers
+	breakers := g.h.rt.Load().breakers
 
 	for range 2 {
 		if res := g.post(t, "/v1/chat/completions", chatBody); res.status != 200 {
@@ -781,8 +773,8 @@ func TestBreakerIgnoresAuthAndNotFound(t *testing.T) {
 	for range 3 {
 		g.post(t, "/v1/chat/completions", chatBody)
 	}
-	if a.count() != 3 || g.h.breakers.State("a.chat").State != "closed" {
-		t.Errorf("401 fed the breaker: a got %d, state %+v", a.count(), g.h.breakers.State("a.chat"))
+	if a.count() != 3 || g.h.rt.Load().breakers.State("a.chat").State != "closed" {
+		t.Errorf("401 fed the breaker: a got %d, state %+v", a.count(), g.h.rt.Load().breakers.State("a.chat"))
 	}
 }
 
@@ -841,7 +833,7 @@ func TestPinLifecycle(t *testing.T) {
 	if res := send("T"); res.status != 502 {
 		t.Fatalf("got %d", res.status)
 	}
-	key, _, _ := g.h.rules.Key(protocol.Lookup(protocol.Chat), "m", http.Header{"X-Session-Affinity": {"T"}}, nil)
+	key, _, _ := g.h.rt.Load().rules.Key(protocol.Lookup(protocol.Chat), "m", http.Header{"X-Session-Affinity": {"T"}}, nil)
 	if _, ok := g.h.pins.Get(affinity.PinKey{Protocol: "chat", Key: key, Model: "m"}); ok {
 		t.Error("reservation of a failed request was kept")
 	}
@@ -879,7 +871,7 @@ func TestPinCommittedByHitSurvivesRelease(t *testing.T) {
 	if res := <-first; res.status != 502 {
 		t.Fatalf("A: got %d %s", res.status, res.body)
 	}
-	key, _, _ := g.h.rules.Key(protocol.Lookup(protocol.Chat), "m", http.Header{"X-Session-Affinity": {"S"}}, nil)
+	key, _, _ := g.h.rt.Load().rules.Key(protocol.Lookup(protocol.Chat), "m", http.Header{"X-Session-Affinity": {"S"}}, nil)
 	if got, ok := g.h.pins.Get(affinity.PinKey{Protocol: "chat", Key: key, Model: "m"}); !ok || got.Provider != "a" {
 		t.Errorf("pin after A's failure = %v %v, want kept at a", got, ok)
 	}
@@ -1008,7 +1000,7 @@ breaker:
 			t.Fatalf("count_tokens did not fail over: %s", res.body)
 		}
 	}
-	if st := g.h.breakers.State("a.anthropic"); st.State != "closed" || st.Failures != 0 {
+	if st := g.h.rt.Load().breakers.State("a.anthropic"); st.State != "closed" || st.Failures != 0 {
 		t.Fatalf("count_tokens fed the breaker: %+v", st)
 	}
 
@@ -1016,7 +1008,7 @@ breaker:
 	aCreate.Store(529)
 	create()
 	aCreate.Store(200)
-	g.h.breakers.Success("a.anthropic")
+	g.h.rt.Load().breakers.Success("a.anthropic")
 
 	aCount.Store(200)
 	res = count()
@@ -1078,7 +1070,7 @@ breaker:
 	if res := create(); gjson.Get(res.body, "from").Str != "b" {
 		t.Fatalf("create: %s", res.body)
 	}
-	g.h.breakers.Success("a.responses")
+	g.h.rt.Load().breakers.Success("a.responses")
 
 	res := search("S")
 	if gjson.Get(res.body, "from").Str != "b" || b.last().path != "/v1/alpha/search" || b.last().header.Get("Authorization") != "Bearer key-b" {
@@ -1096,7 +1088,7 @@ breaker:
 	if res := search("S"); gjson.Get(res.body, "from").Str != "a" {
 		t.Fatalf("search did not fail over: %s", res.body)
 	}
-	if st := g.h.breakers.State("b.responses"); st.State != "closed" || st.Failures != 0 {
+	if st := g.h.rt.Load().breakers.State("b.responses"); st.State != "closed" || st.Failures != 0 {
 		t.Fatalf("search fed the breaker: %+v", st)
 	}
 	aCreate.Store(200)
@@ -1287,7 +1279,7 @@ breaker:
 	if got.path != "/v1/chat/completions" || got.header.Get("Authorization") != "Bearer key-p" || got.header.Get("X-Title") != "verbatim" {
 		t.Errorf("chat request: %s %v", got.path, got.header)
 	}
-	if st := g.h.breakers.State("p.chat"); st.State != "open" {
+	if st := g.h.rt.Load().breakers.State("p.chat"); st.State != "open" {
 		t.Fatalf("chat breaker: %+v", st)
 	}
 	if res := g.post(t, "/v1/chat/completions", chatBody); res.status != 502 || res.header.Get("X-Verbatim-Error") != "all_upstreams_open" {
@@ -1401,6 +1393,11 @@ routes:
 	res := g.post(t, "/v1/messages", `{"model":"m"}`)
 	if res.status != 503 || res.header.Get("X-Verbatim-Error") != "too_many_inflight" || !strings.HasPrefix(gjson.Get(res.body, "error.message").Str, "too_many_inflight: ") {
 		t.Fatalf("got %d %v %s", res.status, res.header, res.body)
+	}
+	// The request still running keeps counting after a reload.
+	g.h.SetConfig(g.cfg, models.New(g.cfg, nil, time.Minute, time.Second))
+	if res := g.post(t, "/v1/messages", `{"model":"m"}`); res.status != 503 {
+		t.Fatalf("after reload: got %d %s", res.status, res.body)
 	}
 }
 
@@ -1554,7 +1551,7 @@ routes:
 	if res.status != 200 || row.Outcome != "upstream_error_event" || deref(row.InputTokens) != int64(3) {
 		t.Errorf("status %d, outcome %s, input %v", res.status, row.Outcome, deref(row.InputTokens))
 	}
-	if st := g.h.breakers.State("a.anthropic"); st.Failures != 0 {
+	if st := g.h.rt.Load().breakers.State("a.anthropic"); st.Failures != 0 {
 		t.Errorf("error event fed the breaker: %+v", st)
 	}
 }
@@ -1677,5 +1674,46 @@ routes:
 	}
 	if !strings.Contains(row.AttemptLog, `"excerpt":`+strconv.Quote(msg)) {
 		t.Errorf("attempt_log excerpt not decompressed: %s", row.AttemptLog)
+	}
+}
+
+func TestSetConfig(t *testing.T) {
+	a := newUpstream(t, reply(200, `{"from":"a"}`))
+	b := newUpstream(t, reply(200, `{"from":"b"}`))
+	g := newGateway(t, sessionTargets(a.URL, b.URL, "prefer"))
+	if res := g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "S"); res.body != `{"from":"a"}` {
+		t.Fatalf("before: %d %s", res.status, res.body)
+	}
+
+	// The next configuration sets a client key and puts b first.
+	cfg, _, err := config.Parse([]byte("server:\n  api_key: k2\nproviders:\n"+prov("a", "chat", a.URL)+prov("b", "chat", b.URL)+`
+routes:
+  - model: m
+    targets:
+      - provider: b
+      - provider: a
+        priority: 2
+affinity:
+  rules:
+    - match: {protocol: chat}
+      key: [{header: x-session-affinity}]
+  fallback: none
+`), "next.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.h.SetConfig(cfg, models.New(cfg, nil, time.Minute, time.Second))
+
+	if res := g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "S"); res.status != 401 {
+		t.Errorf("without the new key: %d", res.status)
+	}
+	send := func(session string) string {
+		return g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", session, "Authorization", "Bearer k2").body
+	}
+	if got := send("S"); got != `{"from":"a"}` {
+		t.Errorf("pinned session after reload: %s, want its pin to a kept", got)
+	}
+	if got := send("T"); got != `{"from":"b"}` {
+		t.Errorf("new session after reload: %s, want the new order", got)
 	}
 }

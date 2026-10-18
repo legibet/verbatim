@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
-import { isConfigView, isProvidersView, useApi, type EndpointView } from "@/api"
+import { isConfigReload, isConfigView, isProvidersView, postJSON, useApi, type ConfigReload, type EndpointView } from "@/api"
 import { Dash, ErrorLine, Mark, SectionTitle } from "@/common"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { fmtAge, fmtClock, fmtInt } from "@/format"
@@ -88,7 +89,7 @@ export function Providers() {
         </div>
       </section>
 
-      <ConfigSection />
+      <ConfigSection onReloaded={reload} />
     </div>
   )
 }
@@ -123,17 +124,76 @@ function useNow(ticking: boolean): number {
   return ticking ? now : Date.now()
 }
 
-function ConfigSection() {
-  const { data, error } = useApi("config", isConfigView)
+// ConfigSection shows the configuration being served and reloads it from
+// the file, as SIGHUP does.
+function ConfigSection({ onReloaded }: { onReloaded: () => void }) {
+  // Polled like the providers table, so a reload through SIGHUP shows too.
+  const { data, error, reload } = useApi("config", isConfigView, 5000)
+  const [reloading, setReloading] = useState(false)
+  const [result, setResult] = useState<ConfigReload | Error | null>(null)
+  const reloadConfig = async () => {
+    setReloading(true)
+    try {
+      setResult(await postJSON("config/reload", isConfigReload))
+      reload()
+      onReloaded()
+    } catch (e) {
+      setResult(e instanceof Error ? e : new Error(String(e)))
+    } finally {
+      setReloading(false)
+    }
+  }
+
   return (
     <section>
+      <SectionTitle
+        aside={
+          <Button variant="outline" size="sm" disabled={reloading} onClick={() => void reloadConfig()}>
+            {reloading ? "Reloading config" : "Reload config"}
+          </Button>
+        }
+      >
+        Configuration
+      </SectionTitle>
+      <p className="mb-3 max-w-[72ch] text-muted-foreground">
+        Reload reads the configuration file again, as SIGHUP does. Running requests finish under the previous
+        configuration; pins are kept, and circuit breakers and model lists start afresh.
+      </p>
+      {result && (
+        <div role="status" className="mb-3 space-y-1">
+          {result instanceof Error ? (
+            <>
+              <Mark tone="err" className="text-err-ink">
+                Reload failed; the previous configuration is still served.
+              </Mark>
+              <pre className="max-w-[100ch] font-mono text-[12px] whitespace-pre-wrap text-err-ink">{result.message}</pre>
+            </>
+          ) : (
+            <>
+              <Mark tone="ok">Configuration reloaded.</Mark>
+              {result.warnings.length > 0 && (
+                <details>
+                  <summary className="w-fit cursor-pointer text-muted-foreground select-none">
+                    {result.warnings.length} {result.warnings.length === 1 ? "warning" : "warnings"}
+                  </summary>
+                  <ul className="mt-1 max-w-[100ch] space-y-0.5 font-mono text-[12px] text-muted-foreground">
+                    {result.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
+          )}
+        </div>
+      )}
       <details className="group">
         <summary className="flex w-fit cursor-pointer list-none items-baseline gap-2 outline-none select-none focus-visible:underline [&::-webkit-details-marker]:hidden">
           <span aria-hidden className="inline-block w-3 text-muted-foreground group-open:rotate-90">
             ›
           </span>
-          <SectionTitle>Loaded configuration</SectionTitle>
-          <span className="text-muted-foreground">read-only; keys, header values, and URL credentials are redacted</span>
+          <span>Served configuration</span>
+          <span className="text-muted-foreground">keys, header values, and URL credentials are redacted</span>
         </summary>
         <div className="mt-1 ml-5">
           {error ? (

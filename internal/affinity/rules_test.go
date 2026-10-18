@@ -36,17 +36,8 @@ func sha(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func mustCompile(t *testing.T, a config.Affinity) *Rules {
-	t.Helper()
-	r, err := Compile(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r
-}
-
 func TestKey(t *testing.T) {
-	rules := mustCompile(t, config.Affinity{
+	rules := NewRules(config.Affinity{
 		Fallback: "prefix_hash",
 		Rules: []config.Rule{
 			{Match: config.RuleMatch{Protocol: "anthropic", Model: "claude-*"},
@@ -111,7 +102,7 @@ func TestKey(t *testing.T) {
 }
 
 func TestKeyPrefixHashDeterministicAndProtocolScoped(t *testing.T) {
-	rules := mustCompile(t, config.Affinity{Fallback: "prefix_hash"})
+	rules := NewRules(config.Affinity{Fallback: "prefix_hash"})
 	body := []byte(`{"system":"s","user":{"content":"hi"},"later":1}`)
 	k1, _, _ := rules.Key(fakeProto{id: protocol.Chat}, "m", http.Header{}, body)
 	k2, _, _ := rules.Key(fakeProto{id: protocol.Chat}, "m", http.Header{}, []byte(`{"system":"s","user":{"content":"hi"},"later":2}`))
@@ -125,34 +116,8 @@ func TestKeyPrefixHashDeterministicAndProtocolScoped(t *testing.T) {
 }
 
 func TestKeyFallbackNone(t *testing.T) {
-	rules := mustCompile(t, config.Affinity{Fallback: "none"})
+	rules := NewRules(config.Affinity{Fallback: "none"})
 	if key, source, ok := rules.Key(fakeProto{id: protocol.Chat}, "m", http.Header{}, []byte(`{"user":"hi"}`)); ok || key != "" || source != "" {
 		t.Fatalf("Key = %q %q %v", key, source, ok)
-	}
-}
-
-func TestCompileErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  config.Affinity
-		want string
-	}{
-		{"fallback", config.Affinity{Fallback: "hash"}, `affinity.fallback: must be prefix_hash or none, got "hash"`},
-		{"protocol", config.Affinity{Fallback: "none", Rules: []config.Rule{
-			{Match: config.RuleMatch{Protocol: "openai"}, Key: []config.KeySource{{Header: "x"}}}}},
-			`affinity.rules[0].match.protocol: unknown protocol "openai"`},
-		{"no key", config.Affinity{Fallback: "none", Rules: []config.Rule{{}}},
-			"affinity.rules[0].key: at least one source is required"},
-		{"both", config.Affinity{Fallback: "none", Rules: []config.Rule{
-			{Key: []config.KeySource{{Header: "x"}, {Header: "y", Body: "z"}}}}},
-			"affinity.rules[0].key[1]: exactly one of body or header is required"},
-		{"neither", config.Affinity{Fallback: "none", Rules: []config.Rule{
-			{Key: []config.KeySource{{}}}}},
-			"affinity.rules[0].key[0]: exactly one of body or header is required"},
-	}
-	for _, tt := range tests {
-		if _, err := Compile(tt.cfg); err == nil || err.Error() != tt.want {
-			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
-		}
 	}
 }
