@@ -112,8 +112,11 @@ func (c *Cache) Start(ctx context.Context) {
 }
 
 // keepFresh refreshes one endpoint's list until ctx is done, calling warmed
-// once the first fetch has ended.
+// once the first fetch has ended. It warns when fetches start failing, not on
+// every retry: an endpoint with no model list would otherwise warn every
+// retryInterval for good.
 func (c *Cache) keepFresh(ctx context.Context, e endpoint, warmed func()) {
+	failing := false
 	for {
 		wait := c.ttl
 		err := c.refresh(ctx, e)
@@ -121,12 +124,18 @@ func (c *Cache) keepFresh(ctx context.Context, e endpoint, warmed func()) {
 			warmed()
 			warmed = nil
 		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return
+		case err != nil:
+			if !failing {
+				slog.Warn("model list fetch failed; keeping the previous list and retrying", "endpoint", e.name(), "err", err)
 			}
-			slog.Warn("model list fetch failed; keeping the previous list", "endpoint", e.name(), "err", err)
+			failing = true
 			wait = min(c.ttl, retryInterval)
+		case failing:
+			slog.Info("model list fetch succeeded again", "endpoint", e.name())
+			failing = false
 		}
 		t := time.NewTimer(wait)
 		select {

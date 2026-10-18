@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,12 +24,14 @@ type provider struct {
 	*httptest.Server
 	header atomic.Pointer[http.Header]
 	fail   atomic.Bool
+	hits   atomic.Int64 // requests served
 }
 
 func newProvider(t *testing.T, pages map[string]string) *provider {
 	t.Helper()
 	p := &provider{}
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.hits.Add(1)
 		h := r.Header.Clone()
 		p.header.Store(&h)
 		q := r.URL.Query()
@@ -248,4 +252,73 @@ func TestAuthorize(t *testing.T) {
 	if len(h) != 0 {
 		t.Errorf("auth none set %v", h)
 	}
+}
+
+// A failing endpoint warns when its fetches start failing, not on every retry.
+func TestFailureWarnsOnce(t *testing.T) {
+	p := newProvider(t, map[string]string{"": openai("m-1")})
+	p.fail.Store(true)
+	cfg, _, err := config.Parse([]byte(fmt.Sprintf(`
+providers:
+  p: {key: k, endpoints: {chat: {base_url: %s}}}
+routes:
+  - model: "m-*"
+    targets: [{provider: p}]
+`, p.URL)), "test.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs syncBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// A TTL this short retries a failed fetch every 5ms.
+	c := New(cfg, nil, 5*time.Millisecond, time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// await waits until the provider has served n more requests. A fetch logs
+	// before the next one starts, so every fetch but the last has logged.
+	await := func(n int64) {
+		t.Helper()
+		want := p.hits.Load() + n
+		for deadline := time.Now().Add(5 * time.Second); p.hits.Load() < want; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the provider served %d of %d requests", p.hits.Load(), want)
+			}
+		}
+	}
+	c.Start(ctx)
+	await(10)
+	p.fail.Store(false)
+	for deadline := time.Now().Add(5 * time.Second); len(c.Names(context.Background())) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the list was never fetched")
+		}
+	}
+	p.fail.Store(true)
+	await(10)
+	cancel()
+
+	out := logs.String()
+	if warns, infos := strings.Count(out, "level=WARN"), strings.Count(out, "level=INFO"); warns != 2 || infos != 1 {
+		t.Errorf("%d warnings and %d info lines, want 2 and 1:\n%s", warns, infos, out)
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
