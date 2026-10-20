@@ -202,8 +202,8 @@ breaker:
   cooldown: 30s
 
 models:
-  cache_ttl: 10m
-  timeout: 3s
+  cache_ttl: 1h
+  timeout: 10s
 
 log:
   path: ~/.verbatim/verbatim.db

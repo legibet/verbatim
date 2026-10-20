@@ -130,8 +130,8 @@ type Breaker struct {
 }
 
 type Models struct {
-	CacheTTL Duration `yaml:"cache_ttl"` // default 10m
-	Timeout  Duration `yaml:"timeout"`   // default 3s
+	CacheTTL Duration `yaml:"cache_ttl"` // default 1h
+	Timeout  Duration `yaml:"timeout"`   // default 10s
 }
 
 type Log struct {

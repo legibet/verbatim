@@ -114,7 +114,7 @@ func defaults() *Config {
 		},
 		Affinity: Affinity{TTL: Duration(time.Hour), Mode: "prefer", Fallback: "prefix_hash"},
 		Breaker:  Breaker{FailureThreshold: 3, Cooldown: Duration(30 * time.Second)},
-		Models:   Models{CacheTTL: Duration(10 * time.Minute), Timeout: Duration(3 * time.Second)},
+		Models:   Models{CacheTTL: Duration(time.Hour), Timeout: Duration(10 * time.Second)},
 		Log: Log{
 			Path:              "~/.verbatim/verbatim.db",
 			Retention:         Duration(90 * 24 * time.Hour),

@@ -92,8 +92,8 @@ breaker:
   cooldown: 30s
 
 models:
-  cache_ttl: 10m
-  timeout: 3s
+  cache_ttl: 1h
+  timeout: 10s
 
 log:
   path: ~/.verbatim/verbatim.db
@@ -250,7 +250,7 @@ func TestDefaults(t *testing.T) {
 		}},
 		Affinity: Affinity{TTL: Duration(time.Hour), Mode: "prefer", Fallback: "prefix_hash"},
 		Breaker:  Breaker{FailureThreshold: 3, Cooldown: Duration(30 * time.Second)},
-		Models:   Models{CacheTTL: Duration(10 * time.Minute), Timeout: Duration(3 * time.Second)},
+		Models:   Models{CacheTTL: Duration(time.Hour), Timeout: Duration(10 * time.Second)},
 		Log:      Log{Path: filepath.Join(h, ".verbatim/verbatim.db"), Retention: Duration(90 * 24 * time.Hour), ErrorExcerptBytes: 4096},
 		Pricing:  Pricing{Cache: filepath.Join(h, ".verbatim/pricing")},
 	}

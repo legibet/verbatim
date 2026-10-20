@@ -201,8 +201,8 @@ breaker:
 # models: the endpoints' model-list cache behind GET /v1/models.
 # ---------------------------------------------------------------------------
 models:
-  cache_ttl: 10m                    # default
-  timeout: 3s                       # default; per fetch. Clients never wait on a refresh,
+  cache_ttl: 1h                     # default
+  timeout: 10s                      # default; per fetch. Clients never wait on a refresh,
                                     # only on the first round right after startup.
 
 # ---------------------------------------------------------------------------
