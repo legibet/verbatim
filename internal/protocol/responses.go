@@ -12,20 +12,20 @@ type responsesProtocol struct{ bodyModel }
 
 func (responsesProtocol) ID() ID { return Responses }
 
-func (responsesProtocol) Match(method, path string) (Operation, string, bool) {
+func (responsesProtocol) Match(method, path string) (Operation, bool) {
 	if method != http.MethodPost {
-		return "", "", false
+		return "", false
 	}
 	switch path {
 	case "/v1/responses":
-		return Create, "", true
+		return Create, true
 	case "/v1/alpha/search":
-		return Search, "", true
+		return Search, true
 	}
-	return "", "", false
+	return "", false
 }
 
-func (responsesProtocol) Suffix(op Operation, _ string) string {
+func (responsesProtocol) Suffix(op Operation) string {
 	if op == Search {
 		return "/alpha/search"
 	}
@@ -33,8 +33,6 @@ func (responsesProtocol) Suffix(op Operation, _ string) string {
 }
 
 func (responsesProtocol) ModelsPath(after string) string { return openAIModelsPath(after) }
-
-func (responsesProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
 func (responsesProtocol) DefaultHeaders(http.Header) {}
 

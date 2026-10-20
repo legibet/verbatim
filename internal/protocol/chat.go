@@ -12,18 +12,16 @@ type chatProtocol struct{ bodyModel }
 
 func (chatProtocol) ID() ID { return Chat }
 
-func (chatProtocol) Match(method, path string) (Operation, string, bool) {
+func (chatProtocol) Match(method, path string) (Operation, bool) {
 	if method == http.MethodPost && path == "/v1/chat/completions" {
-		return Create, "", true
+		return Create, true
 	}
-	return "", "", false
+	return "", false
 }
 
-func (chatProtocol) Suffix(Operation, string) string { return "/chat/completions" }
+func (chatProtocol) Suffix(Operation) string { return "/chat/completions" }
 
 func (chatProtocol) ModelsPath(after string) string { return openAIModelsPath(after) }
-
-func (chatProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
 func (chatProtocol) DefaultHeaders(http.Header) {}
 

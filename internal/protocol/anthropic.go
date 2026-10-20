@@ -17,20 +17,20 @@ type anthropicProtocol struct{ bodyModel }
 
 func (anthropicProtocol) ID() ID { return Anthropic }
 
-func (anthropicProtocol) Match(method, path string) (Operation, string, bool) {
+func (anthropicProtocol) Match(method, path string) (Operation, bool) {
 	if method != http.MethodPost {
-		return "", "", false
+		return "", false
 	}
 	switch path {
 	case "/v1/messages":
-		return Create, "", true
+		return Create, true
 	case "/v1/messages/count_tokens":
-		return CountTokens, "", true
+		return CountTokens, true
 	}
-	return "", "", false
+	return "", false
 }
 
-func (anthropicProtocol) Suffix(op Operation, _ string) string {
+func (anthropicProtocol) Suffix(op Operation) string {
 	if op == CountTokens {
 		return "/v1/messages/count_tokens"
 	}
@@ -44,8 +44,6 @@ func (anthropicProtocol) ModelsPath(after string) string {
 	}
 	return "/v1/models?" + q.Encode()
 }
-
-func (anthropicProtocol) DefaultAuth() AuthScheme { return AuthXAPIKey }
 
 func (anthropicProtocol) DefaultHeaders(h http.Header) {
 	if len(h.Values("anthropic-version")) == 0 {

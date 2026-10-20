@@ -20,20 +20,20 @@ type imagesProtocol struct{}
 
 func (imagesProtocol) ID() ID { return Images }
 
-func (imagesProtocol) Match(method, path string) (Operation, string, bool) {
+func (imagesProtocol) Match(method, path string) (Operation, bool) {
 	if method != http.MethodPost {
-		return "", "", false
+		return "", false
 	}
 	switch path {
 	case "/v1/images/generations":
-		return Generate, "", true
+		return Generate, true
 	case "/v1/images/edits":
-		return Edit, "", true
+		return Edit, true
 	}
-	return "", "", false
+	return "", false
 }
 
-func (imagesProtocol) Suffix(op Operation, _ string) string {
+func (imagesProtocol) Suffix(op Operation) string {
 	if op == Edit {
 		return "/images/edits"
 	}
@@ -77,8 +77,6 @@ func (imagesProtocol) Stream(body []byte, contentType string) bool {
 	start, end, ok := formField(body, boundary, "stream")
 	return ok && string(body[start:end]) == "true"
 }
-
-func (imagesProtocol) DefaultAuth() AuthScheme { return AuthBearer }
 
 func (imagesProtocol) DefaultHeaders(http.Header) {}
 

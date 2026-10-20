@@ -16,8 +16,8 @@
 # ---------------------------------------------------------------------------
 server:
   listen: 127.0.0.1:8080            # default. Use 0.0.0.0:8080 to serve the LAN.
-  api_key: ${VERBATIM_KEY}          # Clients send it as "Authorization: Bearer",
-                                    # "x-api-key", "x-goog-api-key", or ?key=.
+  api_key: ${VERBATIM_KEY}          # Clients send it as "Authorization: Bearer"
+                                    # or "x-api-key".
                                     # Optional on a loopback address; `check`
                                     # warns if it is missing elsewhere.
   max_body_bytes: 33554432          # default 32 MiB; larger requests get 413
@@ -48,7 +48,7 @@ providers:
   openai:
     key: ${OPENAI_KEY}
     endpoints:                      # keyed by protocol: chat | responses | anthropic |
-                                    # images | gemini (gemini: not served yet)
+                                    # images
       responses: {base_url: https://api.openai.com/v1}
       chat: {base_url: https://api.openai.com/v1}
       images:                       # OpenAI Images API: JSON or multipart (only the
@@ -57,7 +57,7 @@ providers:
         header_timeout: 5m          # any endpoint; default server.header_timeout. A
                                     # non-streamed image is answered once it is drawn.
         # auth: bearer              # default by protocol: chat/responses/images bearer,
-                                    # anthropic x-api-key, gemini x-goog-api-key.
+                                    # anthropic x-api-key.
                                     # "none" for a local server without a key.
 
   anthropic:

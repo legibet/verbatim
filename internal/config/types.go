@@ -47,7 +47,7 @@ type Provider struct {
 // Endpoint is where a provider serves one protocol.
 type Endpoint struct {
 	BaseURL string `yaml:"base_url"` // the base URL the protocol's official SDK takes
-	Auth    string `yaml:"auth"`     // bearer | x-api-key | x-goog-api-key | none; Load fills the protocol's default
+	Auth    string `yaml:"auth"`     // bearer | x-api-key | none; Load fills the protocol's default
 	// HeaderTimeout bounds the wait for this endpoint's response headers;
 	// Load fills server.header_timeout. A non-streamed image is answered
 	// only once it is drawn.

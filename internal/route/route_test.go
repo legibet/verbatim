@@ -19,16 +19,15 @@ func testConfig() *config.Config {
 	}
 	return &config.Config{
 		Providers: map[string]config.Provider{
-			"ms":       eps("anthropic", "chat"),
-			"relay":    eps("chat"),
-			"or":       eps("anthropic", "chat"),
-			"oa":       eps("responses", "chat"),
-			"local":    eps("chat"),
-			"rr-a":     eps("chat"),
-			"rr-b":     eps("chat"),
-			"rr-c":     eps("chat"),
-			"rr-d":     eps("chat"),
-			"only-gem": eps("gemini"),
+			"ms":    eps("anthropic", "chat"),
+			"relay": eps("chat"),
+			"or":    eps("anthropic", "chat"),
+			"oa":    eps("responses", "chat"),
+			"local": eps("chat"),
+			"rr-a":  eps("chat"),
+			"rr-b":  eps("chat"),
+			"rr-c":  eps("chat"),
+			"rr-d":  eps("chat"),
 		},
 		Routes: []config.Route{
 			{Model: "kimi-k3", Balance: "weighted", Targets: []config.Target{

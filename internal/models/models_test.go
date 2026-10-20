@@ -18,8 +18,8 @@ import (
 	"verbatim/internal/config"
 )
 
-// provider serves GET /models with the pages given, keyed by the after_id or
-// pageToken query parameter, and records the headers of the last request.
+// provider serves GET /models with the pages given, keyed by the after_id
+// query parameter, and records the headers of the last request.
 type provider struct {
 	*httptest.Server
 	header atomic.Pointer[http.Header]
@@ -34,8 +34,7 @@ func newProvider(t *testing.T, pages map[string]string) *provider {
 		p.hits.Add(1)
 		h := r.Header.Clone()
 		p.header.Store(&h)
-		q := r.URL.Query()
-		body, ok := pages[q.Get("after_id")+q.Get("pageToken")]
+		body, ok := pages[r.URL.Query().Get("after_id")]
 		if p.fail.Load() || !strings.HasSuffix(r.URL.Path, "/models") || !ok {
 			w.WriteHeader(500)
 			return
@@ -63,10 +62,6 @@ func TestNamesAndFetch(t *testing.T) {
 		"":         `{"data":[{"id":"claude-a"},{"id":"claude-b"}],"has_more":true,"last_id":"claude-b"}`,
 		"claude-b": `{"data":[{"id":"claude-c"},{"id":"gpt-6"}],"has_more":false,"last_id":"gpt-6"}`,
 	})
-	gem := newProvider(t, map[string]string{
-		"":   `{"models":[{"name":"models/gemini-x"}],"nextPageToken":"p2"}`,
-		"p2": `{"models":[{"name":"models/gemini-y"},{"name":"models/other"}]}`,
-	})
 	prefixed := newProvider(t, map[string]string{"": openai("openai/gpt-7", "openai/gpt-5", "openai/gpt-4x", "openai/o3", "other/gpt-8")})
 	rewrite := newProvider(t, nil) // must never be asked
 	unused := newProvider(t, nil)
@@ -78,7 +73,6 @@ providers:
     endpoints:
       chat: {base_url: %s}
       anthropic: {base_url: %s}
-  gem: {key: kg, endpoints: {gemini: {base_url: %s}}}
   prefixed: {key: kp, endpoints: {chat: {base_url: %s}}}
   rewrite: {key: kr, headers: {x-extra: "1", x-drop: null}, endpoints: {chat: {base_url: %s}}}
   unused: {key: ku, endpoints: {chat: {base_url: %s}}}
@@ -92,12 +86,10 @@ routes:
     targets: [{provider: multi}, {provider: prefixed, model: "openai/gpt-*"}, {provider: rewrite, model: fixed}]
   - model: "claude-*"
     targets: [{provider: multi.anthropic}, {provider: rewrite, model: fixed}]
-  - model: "gemini-*"
-    targets: [{provider: gem}]
   - model: "*"
     discover: false
     targets: [{provider: multi.chat}]
-`, chat.URL, anth.URL, gem.URL, prefixed.URL, rewrite.URL, unused.URL)), "test.yaml")
+`, chat.URL, anth.URL, prefixed.URL, rewrite.URL, unused.URL)), "test.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +98,7 @@ routes:
 	for _, e := range c.endpoints {
 		names = append(names, e.name())
 	}
-	if want := []string{"gem.gemini", "multi.anthropic", "multi.chat", "prefixed.chat"}; !slices.Equal(names, want) {
+	if want := []string{"multi.anthropic", "multi.chat", "prefixed.chat"}; !slices.Equal(names, want) {
 		t.Fatalf("endpoints to fetch = %v, want %v", names, want)
 	}
 	if got := c.Names(context.Background()); !slices.Equal(got, []string{"kimi-k3"}) {
@@ -123,9 +115,7 @@ routes:
 	// gpt-4o belongs to the earlier gpt-4* route; o3 matches no pattern;
 	// prefixed's ids map back through openai/gpt-* to gpt-7 and gpt-5 (already
 	// listed) and gpt-4x (owned by gpt-4*); the others do not match it.
-	// gemini ids lose their models/ prefix, and its second page comes
-	// through pageToken.
-	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c", "gemini-x", "gemini-y"}
+	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c"}
 	if got := c.Names(context.Background()); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
 	}
@@ -141,10 +131,7 @@ routes:
 	if h.Get("X-Api-Key") != "km" || h.Get("Anthropic-Version") != "2023-06-01" || h.Get("Authorization") != "" {
 		t.Errorf("anthropic headers: %v", h)
 	}
-	if h := *gem.header.Load(); h.Get("X-Goog-Api-Key") != "kg" {
-		t.Errorf("gemini headers: %v", h)
-	}
-	if ages := c.Ages(); len(ages) != 4 || ages["multi.chat"] < 0 || ages["multi.chat"] > time.Minute {
+	if ages := c.Ages(); len(ages) != 3 || ages["multi.chat"] < 0 || ages["multi.chat"] > time.Minute {
 		t.Errorf("Ages() = %v", ages)
 	}
 

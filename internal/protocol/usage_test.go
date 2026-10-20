@@ -186,10 +186,6 @@ data: {"type": "error", "error": {"type": "overloaded_error", "message": "Overlo
 
 `
 
-// Gemini with ?alt=sse: CRLF line endings, usageMetadata on every chunk.
-const geminiStream = "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"The\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 2400,\"candidatesTokenCount\": 1,\"totalTokenCount\": 2501,\"cachedContentTokenCount\": 2048,\"thoughtsTokenCount\": 100},\"modelVersion\": \"gemini-3.1-pro\",\"responseId\": \"Xy1aaO2xLp6cnvgPq5Gk8Qc\"}\r\n\r\n" +
-	"data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \" end.\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 2400,\"candidatesTokenCount\": 42,\"totalTokenCount\": 2542,\"cachedContentTokenCount\": 2048,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 2400}],\"thoughtsTokenCount\": 100},\"modelVersion\": \"gemini-3.1-pro\",\"responseId\": \"Xy1aaO2xLp6cnvgPq5Gk8Qc\"}\r\n\r\n"
-
 func TestStreamUsage(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -294,19 +290,6 @@ func TestStreamUsage(t *testing.T) {
 			name:    "anthropic error event named only by event line",
 			id:      Anthropic,
 			stream:  "event: error\ndata: {\"error\":{\"type\":\"api_error\",\"message\":\"x\"}}\n\n",
-			errorEv: true,
-		},
-		{
-			name:   "gemini sse",
-			id:     Gemini,
-			stream: geminiStream,
-			want:   "in=352 cr=2048 cw=- cw1h=- out=142 rs=100",
-			respID: "Xy1aaO2xLp6cnvgPq5Gk8Qc",
-		},
-		{
-			name:    "gemini error chunk",
-			id:      Gemini,
-			stream:  "data: {\"error\": {\"code\": 503, \"message\": \"The model is overloaded.\", \"status\": \"UNAVAILABLE\"}}\r\n\r\n",
 			errorEv: true,
 		},
 	}
@@ -435,20 +418,6 @@ func TestBodyUsage(t *testing.T) {
 			id:   Anthropic,
 			op:   CountTokens,
 			body: `{"type":"error","error":{"type":"not_found_error","message":"model: x"}}`,
-		},
-		{
-			name:   "gemini",
-			id:     Gemini,
-			body:   `{"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":12,"totalTokenCount":21,"promptTokensDetails":[{"modality":"TEXT","tokenCount":9}]},"modelVersion":"gemini-3.1-flash","responseId":"m0dbaJ3hNv"}`,
-			want:   "in=9 cr=- cw=- cw1h=- out=12 rs=-",
-			respID: "m0dbaJ3hNv",
-		},
-		{
-			name: "gemini countTokens",
-			id:   Gemini,
-			op:   CountTokens,
-			body: `{"totalTokens": 31, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 31}]}`,
-			want: "in=31 cr=- cw=- cw1h=- out=- rs=-",
 		},
 	}
 	for _, tt := range tests {

@@ -268,7 +268,6 @@ providers:
       chat: {base_url: "https://x/v1"}
       responses: {base_url: "https://x/v1"}
       anthropic: {base_url: "https://x/anthropic"}
-      gemini: {base_url: "https://x"}
       images: {base_url: "https://x/v1"}
   q:
     key: k
@@ -278,7 +277,7 @@ routes:
   - model: m
     targets: [{provider: p}]
 `)
-	for proto, want := range map[string]string{"chat": "bearer", "responses": "bearer", "anthropic": "x-api-key", "gemini": "x-goog-api-key", "images": "bearer"} {
+	for proto, want := range map[string]string{"chat": "bearer", "responses": "bearer", "anthropic": "x-api-key", "images": "bearer"} {
 		if got := cfg.Providers["p"].Endpoints[proto].Auth; got != want {
 			t.Errorf("%s auth = %q, want %q", proto, got, want)
 		}
@@ -481,7 +480,7 @@ func TestValidation(t *testing.T) {
 		{"no providers", "routes: [{model: m, targets: [{provider: p}]}]\n", "providers: at least one provider is required"},
 		{"dot in name", "providers:\n  p.x:\n" + chat + "routes: [{model: m, targets: [{provider: p.x}]}]\n", `providers.p.x: a provider name cannot contain "."`},
 		{"no endpoints", provider("    key: k\n"), "providers.p.endpoints: at least one endpoint is required"},
-		{"unknown protocol", endpoint("grpc", "base_url: \"https://x\""), `providers.p.endpoints.grpc: unknown protocol; must be one of chat, responses, anthropic, gemini, images`},
+		{"unknown protocol", endpoint("grpc", "base_url: \"https://x\""), `providers.p.endpoints.grpc: unknown protocol; must be one of chat, responses, anthropic, images`},
 		{"no base_url", endpoint("chat", ""), "providers.p.endpoints.chat.base_url: required"},
 		{"relative base_url", endpoint("chat", "base_url: /v1"), "providers.p.endpoints.chat.base_url: must be an absolute http or https URL"},
 		{"ftp base_url", endpoint("chat", "base_url: \"ftp://x/v1\""), "providers.p.endpoints.chat.base_url: must be an absolute"},
@@ -489,7 +488,7 @@ func TestValidation(t *testing.T) {
 		{"fragment in base_url", endpoint("chat", "base_url: \"https://x/v1#f\""), "providers.p.endpoints.chat.base_url: must not contain"},
 		{"missing key", provider("    endpoints:\n      chat: {base_url: \"https://x/v1\"}\n"), "providers.p.key: required unless every endpoint's auth is none"},
 		{"missing key, one endpoint keyless", provider("    endpoints:\n      chat: {base_url: \"https://x/v1\", auth: none}\n      anthropic: {base_url: \"https://x\"}\n"), "providers.p.key: required unless every endpoint's auth is none"},
-		{"bad auth", endpoint("chat", "base_url: \"https://x/v1\", auth: basic"), `providers.p.endpoints.chat.auth: must be one of bearer, x-api-key, x-goog-api-key, none, got "basic"`},
+		{"bad auth", endpoint("chat", "base_url: \"https://x/v1\", auth: basic"), `providers.p.endpoints.chat.auth: must be one of bearer, x-api-key, none, got "basic"`},
 		{"negative header_timeout", endpoint("chat", "base_url: \"https://x/v1\", header_timeout: -1s"), "providers.p.endpoints.chat.header_timeout: must be greater than 0"},
 		{"bad header name", provider(chat + "    headers:\n      \"bad header\": x\n"), "providers.p.headers.bad header: not a valid header name"},
 		{"managed header", provider(chat + "    headers:\n      content-length: \"5\"\n"), "providers.p.headers.content-length: managed by verbatim"},

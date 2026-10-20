@@ -43,7 +43,7 @@ const INITIAL: Filters = {
   errors: false,
 }
 
-const PROTOCOLS = ["chat", "responses", "anthropic", "gemini", "images"]
+const PROTOCOLS = ["chat", "responses", "anthropic", "images"]
 const STATUS_CLASSES = ["2xx", "3xx", "4xx", "5xx"]
 const OUTCOMES = [
   { value: "completed", label: "completed" },

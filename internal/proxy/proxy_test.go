@@ -1201,8 +1201,8 @@ routes:
     targets: [{provider: open}]
 `)
 
-	res := g.post(t, "/v1/chat/completions?beta=true&key=client-key&x=%20y", `{"model":"c"}`,
-		"Authorization", "Bearer client-key", "X-Api-Key", "client-key", "X-Goog-Api-Key", "client-key",
+	res := g.post(t, "/v1/chat/completions?beta=true&x=%20y", `{"model":"c"}`,
+		"Authorization", "Bearer client-key", "X-Api-Key", "client-key",
 		"Connection", "X-Hop", "X-Hop", "1", "Openai-Project", "p", "X-Keep", "1", "Accept-Encoding", "gzip, br")
 	if res.status != 200 {
 		t.Fatalf("got %d %s", res.status, res.body)
@@ -1214,7 +1214,6 @@ routes:
 	want := map[string]string{
 		"Authorization":   "Bearer key-chat",
 		"X-Api-Key":       "",
-		"X-Goog-Api-Key":  "",
 		"X-Hop":           "",
 		"Openai-Project":  "",
 		"X-Title":         "verbatim",
@@ -1237,15 +1236,14 @@ routes:
 	if v := ups["anth"].last().header.Values("Anthropic-Version"); len(v) != 1 || v[0] != "2024-01-01" {
 		t.Errorf("client anthropic-version replaced: %v", v)
 	}
-	g.post(t, "/v1/messages/count_tokens", `{"model":"ab"}`, "X-Goog-Api-Key", "client-key")
+	g.post(t, "/v1/messages/count_tokens", `{"model":"ab"}`, "X-Api-Key", "client-key")
 	got = ups["anthbearer"].last()
 	if got.path != "/v1/messages/count_tokens" || got.header.Get("Authorization") != "Bearer key-anthbearer" || got.header.Get("X-Api-Key") != "" {
 		t.Errorf("anthropic bearer request: %s %v", got.path, got.header)
 	}
-	g.post(t, "/v1/chat/completions?key=client-key", `{"model":"o"}`)
-	got = ups["open"].last()
-	if got.query != "" || got.header.Get("Authorization") != "" || got.header.Get("X-Api-Key") != "" {
-		t.Errorf("auth none request: %s %v", got.query, got.header)
+	g.post(t, "/v1/chat/completions", `{"model":"o"}`, "Authorization", "Bearer client-key")
+	if got = ups["open"].last(); got.header.Get("Authorization") != "" || got.header.Get("X-Api-Key") != "" {
+		t.Errorf("auth none request: %v", got.header)
 	}
 }
 
@@ -1322,14 +1320,10 @@ routes:
 		{"Authorization", "Bearer secret"},
 		{"Authorization", "bearer secret"},
 		{"X-Api-Key", "secret"},
-		{"X-Goog-Api-Key", "secret"},
 	} {
 		if res := g.post(t, "/v1/messages", `{"model":"m"}`, hdr...); res.status != 200 {
 			t.Errorf("%v: got %d", hdr, res.status)
 		}
-	}
-	if res := g.post(t, "/v1/messages?key=secret", `{"model":"m"}`); res.status != 200 {
-		t.Errorf("query key: got %d", res.status)
 	}
 	if res := g.do(t, "GET", "/v1/models", ""); res.status != 401 {
 		t.Errorf("listing without key: got %d", res.status)
@@ -1558,12 +1552,10 @@ routes:
 
 func TestOtherPaths(t *testing.T) {
 	up := newUpstream(t, reply(200, `{}`))
-	g := newGateway(t, "providers:\n"+prov("a", "chat", up.URL)+prov("g", "gemini", up.URL)+`
+	g := newGateway(t, "providers:\n"+prov("a", "chat", up.URL)+`
 routes:
   - model: m
     targets: [{provider: a}]
-  - model: gem
-    targets: [{provider: g}]
   - model: "x-*"
     targets: [{provider: a}]
 `)
@@ -1575,7 +1567,6 @@ routes:
 		{"GET", "/healthz", 200, `{"ok":true}`, ""},
 		{"GET", "/nope", 404, `{"error":"not found"}`, ""},
 		{"GET", "/v1/chat/completions", 404, `{"error":"not found"}`, ""},
-		{"POST", "/v1beta/models/gem:generateContent", 404, `{"error":"not found"}`, ""},
 		{"GET", "/v1/responses/resp_1", 404, "", "unsupported_operation"},
 		{"DELETE", "/v1/responses/resp_1", 404, "", "unsupported_operation"},
 		{"POST", "/v1/responses/resp_1/cancel", 404, "", "unsupported_operation"},
@@ -1597,15 +1588,10 @@ routes:
 
 	res := g.do(t, "GET", "/v1/models", "")
 	want := `{"object":"list","data":[` +
-		`{"id":"m","object":"model","created":0,"owned_by":"verbatim","type":"model","display_name":"m","created_at":"1970-01-01T00:00:00Z"},` +
-		`{"id":"gem","object":"model","created":0,"owned_by":"verbatim","type":"model","display_name":"gem","created_at":"1970-01-01T00:00:00Z"}],` +
-		`"has_more":false,"first_id":"m","last_id":"gem"}`
+		`{"id":"m","object":"model","created":0,"owned_by":"verbatim","type":"model","display_name":"m","created_at":"1970-01-01T00:00:00Z"}],` +
+		`"has_more":false,"first_id":"m","last_id":"m"}`
 	if res.status != 200 || res.body != want {
 		t.Errorf("/v1/models = %d %s", res.status, res.body)
-	}
-	res = g.do(t, "GET", "/v1beta/models", "")
-	if res.body != `{"models":[{"name":"models/m","displayName":"m"},{"name":"models/gem","displayName":"gem"}]}` {
-		t.Errorf("/v1beta/models = %s", res.body)
 	}
 }
 

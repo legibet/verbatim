@@ -11,7 +11,6 @@ const (
 	Chat      ID = "chat"
 	Responses ID = "responses"
 	Anthropic ID = "anthropic"
-	Gemini    ID = "gemini"
 	Images    ID = "images"
 )
 
@@ -30,15 +29,6 @@ const (
 // create requests of a session: they follow a pin but never create or move
 // one, never feed the breaker, and are neither priced nor aggregated as usage.
 func (op Operation) Auxiliary() bool { return op == CountTokens || op == Search }
-
-type AuthScheme string
-
-const (
-	AuthBearer      AuthScheme = "bearer"
-	AuthXAPIKey     AuthScheme = "x-api-key"
-	AuthXGoogAPIKey AuthScheme = "x-goog-api-key"
-	AuthNone        AuthScheme = "none"
-)
 
 // Usage is the normalized token accounting of one response (design 11.3).
 // A nil field means the provider did not report it; nothing is estimated.
@@ -73,14 +63,13 @@ type UsageParser interface {
 // Protocol describes one wire protocol. Implementations are stateless.
 type Protocol interface {
 	ID() ID
-	// Match recognizes an inbound request path. model is set only when the
-	// model lives in the URL (gemini).
-	Match(method, path string) (op Operation, model string, ok bool)
+	// Match recognizes an inbound request path.
+	Match(method, path string) (op Operation, ok bool)
 	// Suffix is the path appended to an endpoint's base_url for an operation.
 	// base_url is what the protocol's official SDK takes as its base URL, so
-	// the suffix carries the version for anthropic and gemini but not for
-	// the OpenAI protocols, whose SDK base URL already ends in /v1.
-	Suffix(op Operation, model string) string
+	// the suffix carries the version for anthropic but not for the OpenAI
+	// protocols, whose SDK base URL already ends in /v1.
+	Suffix(op Operation) string
 	// ModelsPath is the path and query of one page of the provider's model
 	// list, appended to base_url: the first page when after is empty, else
 	// the page after the cursor ModelList returned. Protocols whose lists
@@ -90,11 +79,10 @@ type Protocol interface {
 	// is the request's Content-Type, which tells a multipart body (images).
 	ModelFromBody(body []byte, contentType string) (string, error)
 	// SetModel rewrites the model name in place (a point update; nothing else
-	// in the body changes). A no-op for protocols whose model lives in the URL.
+	// in the body changes).
 	SetModel(body []byte, contentType, model string) ([]byte, error)
 	// Stream reports whether the request asks for a streamed response.
 	Stream(body []byte, contentType string) bool
-	DefaultAuth() AuthScheme
 	// DefaultHeaders adds the headers the protocol requires when the client
 	// did not send them (anthropic-version only).
 	DefaultHeaders(h http.Header)
@@ -113,7 +101,7 @@ type Protocol interface {
 }
 
 // All lists the protocols verbatim serves, in a fixed order.
-var All = []Protocol{chatProtocol{}, responsesProtocol{}, anthropicProtocol{}, geminiProtocol{}, imagesProtocol{}}
+var All = []Protocol{chatProtocol{}, responsesProtocol{}, anthropicProtocol{}, imagesProtocol{}}
 
 // Lookup returns the protocol with the given id, or nil.
 func Lookup(id ID) Protocol {
@@ -126,11 +114,11 @@ func Lookup(id ID) Protocol {
 }
 
 // MatchPath identifies the protocol and operation of an inbound request.
-func MatchPath(method, path string) (p Protocol, op Operation, model string, ok bool) {
+func MatchPath(method, path string) (p Protocol, op Operation, ok bool) {
 	for _, p := range All {
-		if op, model, ok := p.Match(method, path); ok {
-			return p, op, model, true
+		if op, ok := p.Match(method, path); ok {
+			return p, op, true
 		}
 	}
-	return nil, "", "", false
+	return nil, "", false
 }

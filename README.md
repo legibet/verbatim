@@ -24,7 +24,7 @@ The design document, `docs/design.md`, is the behavior contract.
 - Request log in SQLite: how each request was routed, every attempt, tokens (input, cache read, cache write, output, reasoning, image) as the provider reported them, and a cost from configured list prices.
 - CLI for the log and usage; a web UI at `/ui/` for requests, request detail, usage, and live provider state.
 
-Not in version 1: the Gemini entry point (the protocol adapter exists, the entry point is not served), Responses resource operations (`GET /v1/responses/{id}` and friends return 404), per-user keys, quotas, billing.
+Not in version 1: a Gemini entry point (Gemini models work through Google's OpenAI-compatible API, `https://generativelanguage.googleapis.com/v1beta/openai`, as a `chat` endpoint), Responses resource operations (`GET /v1/responses/{id}` and friends return 404), per-user keys, quotas, billing.
 
 ## Install
 

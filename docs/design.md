@@ -19,13 +19,13 @@ verbatim is a small, self-hosted gateway that sits between LLM API clients and L
 - Prompt or response rewriting beyond the static overrides in section 9.
 - Load-aware or cost-aware scheduling. Routing uses static priority and weight only.
 - Responses resource operations other than creating a response: `GET /v1/responses/{id}`, cancel, delete, input item listing, `background: true` polling, compaction, and the Responses WebSocket transport. These are rejected with 404 in version 1 (section 4.4). The response ownership table (section 7.4) is the foundation for adding them later.
-- Version 1 does not ship the Gemini entry point. The design includes it so that nothing has to change when it is added.
+- A Gemini entry point (`generateContent`). No client verbatim serves speaks it, and Gemini models are reachable through Google's OpenAI-compatible API as a `chat` endpoint (`https://generativelanguage.googleapis.com/v1beta/openai`).
 
 ## 3. Why zero conversion is viable
 
 Research notes are in `.agents/` and are not part of this document. The findings that justify the design:
 
-- Three of the four protocols carry opaque reasoning state that the client must echo back unchanged: Anthropic `signature` and `redacted_thinking.data`, Responses `encrypted_content`, Gemini `thoughtSignature`. The standard Chat Completions schema has no field for this. Provider dialects add non-standard ones (`reasoning_content`, OpenRouter `reasoning_details`, Gemini's `extra_content.google.thought_signature`); verbatim forwards them untouched because it forwards everything untouched, but no gateway can move such state from one provider to another.
+- Three of the four major LLM API protocols carry opaque reasoning state that the client must echo back unchanged: Anthropic `signature` and `redacted_thinking.data`, Responses `encrypted_content`, Gemini `thoughtSignature`. The standard Chat Completions schema has no field for this. Provider dialects add non-standard ones (`reasoning_content`, OpenRouter `reasoning_details`, Gemini's `extra_content.google.thought_signature`); verbatim forwards them untouched because it forwards everything untouched, but no gateway can move such state from one provider to another.
 - Anthropic's preserved thinking (Claude Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5) rejects a request when anything before a thinking block has changed in value. A converter that merges system messages, generates tool-call ids, or reorders blocks breaks every multi-turn conversation.
 - As of October 2026, almost every major provider offers Anthropic Messages and Responses endpoints natively (DeepSeek, Moonshot, Zhipu, MiniMax, Alibaba, OpenRouter, xAI, vLLM, SGLang, llama.cpp, Ollama). The only upstreams without a native path are third-party relays that expose Chat Completions alone, and those are reachable by Chat Completions clients.
 
@@ -42,8 +42,6 @@ verbatim identifies the inbound protocol from the request path. It does not insp
 | `responses` | `search` | `POST /v1/alpha/search` | body `model` |
 | `anthropic` | `create` | `POST /v1/messages` | body `model` |
 | `anthropic` | `count_tokens` | `POST /v1/messages/count_tokens` | body `model` |
-| `gemini` | `create` | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent` | URL path |
-| `gemini` | `count_tokens` | `POST /v1beta/models/{model}:countTokens` | URL path |
 | `images` | `generate` | `POST /v1/images/generations` | body `model` |
 | `images` | `edit` | `POST /v1/images/edits` | body `model`, JSON or a multipart form field |
 
@@ -51,20 +49,20 @@ verbatim identifies the inbound protocol from the request path. It does not insp
 
 `images` is the OpenAI Images API. It is a protocol of its own, like `chat` and `responses`, because whether an upstream serves it is a fact about that upstream, independent of whether it serves chat or Responses at the same base URL. An image model is routed like any other model, by the body `model`; Codex's image tool, for example, sends `gpt-image-2` to `{base_url}/images/generations` and `/images/edits` as JSON. Edits from the OpenAI SDK are `multipart/form-data`, with the model in a form field. Both endpoints are synchronous: the image comes back in the response (as `b64_json`, often megabytes), or as server-sent events (`image_generation.partial_image`, `image_generation.completed`, and the `image_edit.*` equivalents) when the client sets `stream`. The response reports token usage, which section 12.3 prices.
 
-The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the endpoint's `base_url`. `count_tokens` and `search` are auxiliary operations: they serve the create requests of a session, follow a pin but never create or move one, never feed the breaker, and are neither priced nor aggregated as usage. Every other operation (`create`, `generate`, `edit`) is priced, creates and moves pins, and feeds the breaker. The client's query string is preserved on the upstream URL, minus the `key` parameter used by Gemini clients for authentication. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
+The operation matters for affinity (section 7.3), failover (section 8), usage (section 11.3), and the protocol-specific suffix appended to the endpoint's `base_url`. `count_tokens` and `search` are auxiliary operations: they serve the create requests of a session, follow a pin but never create or move one, never feed the breaker, and are neither priced nor aggregated as usage. Every other operation (`create`, `generate`, `edit`) is priced, creates and moves pins, and feeds the breaker. The client's query string is preserved on the upstream URL. Claude Code, for example, sends `/v1/messages?beta=true`; the `?beta=true` reaches the provider.
 
 ### 4.1 Client authentication
 
-If `server.api_key` is set, a request must present it in one of `Authorization: Bearer <key>`, `x-api-key: <key>`, `x-goog-api-key: <key>`, or the `key` query parameter. Any one match is sufficient; a request may carry several. If `server.api_key` is unset, all requests are accepted; the configuration validator prints a warning unless `server.listen` is a loopback address.
+If `server.api_key` is set, a request must present it in `Authorization: Bearer <key>` or `x-api-key: <key>`. Either match is sufficient; a request may carry both. If `server.api_key` is unset, all requests are accepted; the configuration validator prints a warning unless `server.listen` is a loopback address.
 
 ### 4.2 Request forwarding
 
 For a forwarded request, verbatim:
 
 1. Reads the full client body into memory. The body is needed for retries, for the model rewrite, and for the affinity key. Requests above `server.max_body_bytes` (default 32 MiB) are rejected with 413. `server.max_inflight` (default 64) bounds the number of concurrent requests and therefore total buffered memory; excess requests get 503 in native format.
-2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For `gemini` the model is in the URL and the body step is skipped. For a `multipart/form-data` body (`images` edits) the bytes of the `model` field's value are replaced and no other byte changes; the form is never re-encoded, so file parts, field order, and part headers reach the provider as sent. Deserializing the body into a struct is never done, so unknown fields survive.
-3. Builds the upstream URL as the `base_url` of the provider's endpoint for this protocol + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat`, `responses`, and `images` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, `/images/generations`, `/images/edits`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`. For `gemini` it does not either (`https://generativelanguage.googleapis.com`) and the suffixes are `/v1beta/models/{model}:generateContent`, `:countTokens`, and `/v1beta/models`.
-4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`, `x-goog-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's key in the authentication header that the endpoint's `auth` names; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
+2. For each attempt, starts from the original client body and produces the attempt's body: the model name is rewritten in place with a JSON point update (`sjson`-style), then the provider's static overrides (section 9) are applied as point updates. For a `multipart/form-data` body (`images` edits) the bytes of the `model` field's value are replaced and no other byte changes; the form is never re-encoded, so file parts, field order, and part headers reach the provider as sent. Deserializing the body into a struct is never done, so unknown fields survive.
+3. Builds the upstream URL as the `base_url` of the provider's endpoint for this protocol + the operation's fixed suffix + the client's query string. `base_url` is the base URL the protocol's official SDK takes, which is what providers document and what users already put in `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`; the suffix completes it the way that SDK does. For `chat`, `responses`, and `images` the SDK base URL carries the version (`https://api.deepseek.com/v1`) and the suffixes are `/chat/completions`, `/responses`, `/alpha/search`, `/images/generations`, `/images/edits`, and `/models`. For `anthropic` it does not (`https://api.anthropic.com`, `https://api.deepseek.com/anthropic`, `https://openrouter.ai/api`) and the suffixes are `/v1/messages`, `/v1/messages/count_tokens`, and `/v1/models`.
+4. Copies client headers, except hop-by-hop headers (including those named by `Connection`), `Host`, `Content-Length`, and every client authentication carrier (`Authorization`, `x-api-key`). Applies the provider's `headers` map (section 6.2): a string value sets the header, `null` removes it. Then sets the provider's key in the authentication header that the endpoint's `auth` names; it always wins over `headers`. For `anthropic`, if the client did not send `anthropic-version`, verbatim sets `anthropic-version: 2023-06-01`, because the Anthropic API rejects requests without it. This is the only header verbatim adds on its own, and a provider's `headers` can override it.
 5. Sends the request and streams the response back.
 
 ### 4.3 Response forwarding
@@ -81,7 +79,7 @@ verbatim does not add `stream_options.include_usage` to Chat Completions request
 
 | Path | Behavior |
 |---|---|
-| `GET /v1/models`, `GET /v1beta/models` | Served by verbatim from the configuration and provider discovery, section 6.5 |
+| `GET /v1/models` | Served by verbatim from the configuration and provider discovery, section 6.5 |
 | `GET /ui/`, `GET /ui/api/*` | Embedded web UI, section 14 |
 | `GET /healthz` | 200 with `{"ok":true}` |
 | `GET /v1/responses/{id}`, `POST /v1/responses/{id}/cancel`, `DELETE /v1/responses/{id}`, `GET /v1/responses/{id}/input_items`, `POST /v1/responses/compact`, WebSocket upgrades | 404 in Responses error format with code `unsupported_operation` |
@@ -233,14 +231,14 @@ A provider is one upstream service, such as a vendor's API or a relay. It has on
 | `key` | unless every endpoint has `auth: none` | Provider API key |
 | `headers` | no | Map of header name to string (set) or `null` (remove), applied after client headers are copied and before the endpoint's `auth` |
 | `overrides` | no | Ordered list of static request edits applied to every request the provider receives, section 9; not allowed on a provider with an `images` endpoint |
-| `endpoints` | yes | Map from protocol (`chat`, `responses`, `anthropic`, `gemini`, `images`) to the endpoint fields below; at least one |
+| `endpoints` | yes | Map from protocol (`chat`, `responses`, `anthropic`, `images`) to the endpoint fields below; at least one |
 
 Endpoint fields:
 
 | Field | Required | Meaning |
 |---|---|---|
 | `base_url` | yes | The base URL the protocol's official SDK takes; the operation's fixed suffix is appended (section 4.2) |
-| `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, `x-goog-api-key`, or `none`. Default by protocol: `chat`, `responses`, and `images` use `bearer`, `anthropic` uses `x-api-key`, `gemini` uses `x-goog-api-key`. It belongs to the endpoint because the default differs by protocol: one setting for the whole provider would replace the default of every other protocol it serves. |
+| `auth` | no | `bearer` (`Authorization: Bearer <key>`), `x-api-key`, or `none`. Default by protocol: `chat`, `responses`, and `images` use `bearer`, `anthropic` uses `x-api-key`. It belongs to the endpoint because the default differs by protocol: one setting for the whole provider would replace the default of every other protocol it serves. |
 | `header_timeout` | no | Wait for this endpoint's response headers; default `server.header_timeout`. A non-streamed image is answered only once it is drawn, so an `images` endpoint usually needs minutes, while a chat endpoint that long silent should fail over. Endpoints with the same value share one connection pool. |
 
 An endpoint is named `provider.protocol` (`openrouter.anthropic`), so a provider name cannot contain `.`. Circuit breakers (section 8.3), model lists (section 6.5), and the counters of the Providers view (section 14) are kept per endpoint: one protocol of a service failing, as a relay's image channel often does alone, does not stop the others. The request log records the provider, and its `protocol` column tells the endpoint.
@@ -292,7 +290,7 @@ Many clients populate their model picker from `/v1/models`, so the list has to b
 
 Names are deduplicated; the first occurrence wins. The response lists names only; it does not promise that every listed name works for every protocol.
 
-Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2) (for `gemini`, ids are returned with the `models/` prefix stripped). Where the protocol pages the list, verbatim asks for the largest page it allows (`anthropic`: `limit=1000`; `gemini`: `pageSize=1000`) and follows the next-page cursor up to 10 pages: `has_more` and `last_id` sent back as `after_id` for `anthropic` and for OpenAI-compatible relays that page, `nextPageToken` sent back as `pageToken` for `gemini`. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup and after a configuration reload, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and the fetch is retried every minute (every `models.cache_ttl` if that is shorter). A warning is logged when an endpoint's fetches start failing, not on every retry, and an info line when one succeeds again, so an endpoint that has no model list (DeepSeek's and Bailian's Anthropic-compatible endpoints return 404) warns once per start or reload. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the first round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup or a reload does not get an empty list.
+Each endpoint's list comes from `GET {base_url}` + the protocol's model-list suffix (section 4.2). `anthropic` pages the list, and verbatim asks for the largest page it allows (`limit=1000`) and follows the next-page cursor up to 10 pages: `has_more` and `last_id` sent back as `after_id`, for `anthropic` and for OpenAI-compatible relays that page. Lists are cached per endpoint for `models.cache_ttl`, warmed in the background at startup and after a configuration reload, and refreshed in the background when stale. A fetch has a `models.timeout`; on failure the previous list is kept and the fetch is retried every minute (every `models.cache_ttl` if that is shorter). A warning is logged when an endpoint's fetches start failing, not on every retry, and an info line when one succeeds again, so an endpoint that has no model list (DeepSeek's and Bailian's Anthropic-compatible endpoints return 404) warns once per start or reload. The client-facing endpoints read the cache and never wait on a refresh; only a request that arrives while the first round of fetches is still running waits for that round (bounded by `models.timeout`), so a client that lists models right after startup or a reload does not get an empty list.
 
 Response shape: one entry per name carrying the union of what OpenAI and Anthropic clients read, so either parser is satisfied and ignores the rest:
 
@@ -301,8 +299,6 @@ Response shape: one entry per name carrying the union of what OpenAI and Anthrop
                           "type":"model","display_name":"kimi-k3","created_at":"1970-01-01T00:00:00Z"}],
  "has_more":false,"first_id":"kimi-k3","last_id":"kimi-k3"}
 ```
-
-The Gemini listing uses Gemini's shape (`{"models":[{"name":"models/<id>", ...}]}`).
 
 ### 6.6 Reloading
 
@@ -327,7 +323,7 @@ verbatim ships no built-in rules. The example configuration carries the rules th
 
 If no rule matches or no source yields a value, `affinity.fallback` applies:
 
-- `prefix_hash` (default): SHA-256 over the protocol id, the system prompt field, and the first user-role message, each taken as the exact bytes the client sent: `anthropic` uses `system` and the first `messages[]` entry with `role: user`; `chat` uses the first message with role `system` or `developer` and the first with role `user`; `responses` uses `instructions` and the first `input[]` item with `role: user` (or `input` itself when it is a string); `gemini` uses `systemInstruction` and the first `contents[]` entry with `role: user`. If no user-role message exists the request gets no affinity. This is best-effort stickiness: two conversations with the same opening share a pin, and a client that rewrites its opening mid-conversation (context compaction, a changing system prompt) moves to a fresh key. Clients that need guarantees should send a session identifier and name it in a rule.
+- `prefix_hash` (default): SHA-256 over the protocol id, the system prompt field, and the first user-role message, each taken as the exact bytes the client sent: `anthropic` uses `system` and the first `messages[]` entry with `role: user`; `chat` uses the first message with role `system` or `developer` and the first with role `user`; `responses` uses `instructions` and the first `input[]` item with `role: user` (or `input` itself when it is a string). If no user-role message exists the request gets no affinity. This is best-effort stickiness: two conversations with the same opening share a pin, and a client that rewrites its opening mid-conversation (context compaction, a changing system prompt) moves to a fresh key. Clients that need guarantees should send a session identifier and name it in a rule.
 - `none`: no affinity for this request.
 
 ### 7.2 Pin identity and lifetime
@@ -415,7 +411,6 @@ Errors that verbatim itself generates use the inbound protocol's native shape so
 |---|---|
 | `chat`, `responses` | `{"error":{"message":"...","type":"verbatim_error","code":"<code>"}}` |
 | `anthropic` | `{"type":"error","error":{"type":"api_error","message":"<code>: ..."}}` |
-| `gemini` | `{"error":{"code":502,"message":"<code>: ...","status":"UNAVAILABLE"}}` |
 
 Codes and statuses: `unauthenticated` 401; `no_model` 400 (the body has no string `model`); `no_route` 404; `unknown_response_id` 404; `unsupported_operation` 404; `body_too_large` 413; `too_many_inflight` 503; `all_upstreams_failed` 502; `all_upstreams_open` 502; `internal_error` 500 (the ownership lookup itself failed). Every verbatim-generated error carries the header `x-verbatim-error: <code>`, so it can be told apart from a forwarded upstream error, which never carries it.
 
@@ -433,7 +428,7 @@ One SQLite database (`log.path`), WAL mode, tables `requests` and `owned_respons
 | `ts` | integer | request start, unix milliseconds |
 | `request_id` | text | verbatim-generated, also returned as `x-verbatim-request-id` |
 | `upstream_request_id` | text | `x-request-id` or `request-id` from the committed upstream response |
-| `protocol` | text | `chat`, `responses`, `anthropic`, `gemini`, `images` |
+| `protocol` | text | `chat`, `responses`, `anthropic`, `images` |
 | `operation` | text | `create`, `count_tokens`, `search`, `generate`, or `edit` |
 | `client_model` | text | model name as the client sent it |
 | `route` | text | matched route pattern |
@@ -474,15 +469,13 @@ The tee observes the committed response body and keeps the last usage object see
 | `chat` | `usage` | the last chunk carrying a non-null `usage` (it may have `choices: []` and precedes `[DONE]`) | `prompt_tokens`, `completion_tokens`, `prompt_tokens_details.cached_tokens`, `prompt_tokens_details.cache_write_tokens`, `completion_tokens_details.reasoning_tokens`; DeepSeek dialect `prompt_cache_hit_tokens` |
 | `responses` | `usage` | `response.completed`, `response.incomplete`, or `response.failed`, whichever terminal event arrives, `response.usage` | `input_tokens`, `output_tokens`, `input_tokens_details.cached_tokens`, `input_tokens_details.cache_write_tokens`, `output_tokens_details.reasoning_tokens` |
 | `anthropic` | `usage` | `message_start` (`message.usage`) merged with `message_delta` (`usage`); delta values are cumulative, so later values replace earlier ones | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation.ephemeral_5m_input_tokens`, `cache_creation.ephemeral_1h_input_tokens` |
-| `gemini` | `usageMetadata` | last chunk's `usageMetadata` | `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount` |
 | `images` | `usage` | `image_generation.completed` or `image_edit.completed`, `usage` | `input_tokens`, `output_tokens`, `input_tokens_details.image_tokens`, `output_tokens_details.image_tokens` |
-| `count_tokens` | top-level `input_tokens` (Anthropic), `totalTokens` (Gemini) | n/a | |
+| `count_tokens` | top-level `input_tokens` | n/a | |
 
 Normalization into the row:
 
 - `anthropic`: `input_tokens` is already uncached. `cache_write_tokens` = `cache_creation_input_tokens`; `cache_write_1h_tokens` = `cache_creation.ephemeral_1h_input_tokens` when present, else null.
 - `chat`, `responses`: the reported prompt count includes cached and cache-written tokens. `input_tokens` = prompt count minus `cached_tokens` minus `cache_write_tokens`, each treated as 0 only when the provider reports the details object at all; if the details object is absent, `input_tokens` holds the full prompt count and the cache columns are null. OpenAI reports `cache_write_tokens` for GPT-5.6 and later; its cache lifetime is 30 minutes and has no 1-hour variant, so `cache_write_1h_tokens` is null.
-- `gemini`: `input_tokens` = `promptTokenCount` minus `cachedContentTokenCount`; no cache writes are reported.
 - `images`: `input_tokens` and `output_tokens` as reported (the Images API reports no cache tokens); `input_image_tokens` and `output_image_tokens` from the details objects. Some relays (magpie) report only the totals. When the input details are missing, a generations request, which takes only a text prompt, gets an `input_image_tokens` of 0, and an edit gets its whole `input_tokens`: an edit's input images outweigh its prompt, so all of its input is priced as image input, which overstates the cost by the prompt tokens times the difference between the image and text input prices (for gpt-image-2, 20 prompt tokens next to 256 image tokens cost 0.3% more). With `n` above 1 in a stream, the last completed event's usage is kept, as for every other protocol; whether that event reports the whole request or one image is not documented and has not been observed, because the relays tested return one image.
 - `reasoning_tokens` is recorded as reported and is part of `output_tokens`.
 
@@ -605,15 +598,16 @@ The `protocol` package is the only place that knows protocol-specific JSON paths
 
 ```go
 type Protocol interface {
-    ID() string
-    Match(method, path string) (op Operation, model string, ok bool)   // model only for gemini
-    Suffix(op Operation, model string) string                          // path appended to base_url
+    ID() ID
+    Match(method, path string) (op Operation, ok bool)
+    Suffix(op Operation) string                                        // path appended to base_url
     ModelsPath(after string) string                                    // one model-list page, appended to base_url
-    ModelFromBody(body []byte) (string, error)
-    SetModel(body []byte, model string) ([]byte, error)               // no-op for gemini
-    DefaultAuth() AuthScheme
+    ModelList(body []byte) (ids []string, next string)                 // one model-list page and the next cursor
+    ModelFromBody(body []byte, contentType string) (string, error)     // contentType tells a multipart body
+    SetModel(body []byte, contentType, model string) ([]byte, error)
+    Stream(body []byte, contentType string) bool
     DefaultHeaders(h http.Header)                                      // anthropic-version only
-    PrefixForHash(body []byte) ([]byte, bool)                          // false: no user message
+    PrefixForHash(body []byte) (prefix []byte, ok bool)                // false: no user message
     ContinuationRef(body []byte) (id string, ok bool)                  // previous_response_id / conversation
     NewUsageParser(op Operation, stream bool) UsageParser              // incremental, returns Usage and response id
     ErrorBody(status int, code, msg string) []byte
@@ -635,7 +629,6 @@ In:
 
 Out, for later:
 
-- `gemini` entry point (interface in place, adapter not written).
 - Responses resource operations and WebSocket transport (section 4.4).
 - Breaker input from stream-level outcomes.
 - Multiple client keys.
@@ -645,4 +638,3 @@ Out, for later:
 - Default values for `header_timeout`, `idle_timeout`, `failure_threshold`, and `cooldown` are placeholders to be tuned against real agent traffic. Long prompts with large caches can take over 60 seconds to first byte.
 - Whether 404 should be failover-eligible by default. It is useful for relays that lack a model, and wrong if a provider returns 404 for a malformed path. The current choice is eligible, with a warning log, and never counted by the breaker.
 - Whether `affinity.ttl` should default higher than one hour. A working session with a lunch break in it loses its pin at one hour.
-- The Gemini Interactions API, which Google now positions above `generateContent`, has not been examined. It may require another protocol rather than an extension of `gemini`.

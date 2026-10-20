@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net/http"
 	"net/textproto"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -461,15 +460,15 @@ func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) 
 	if body, err = applyOverrides(body, p.Overrides); err != nil {
 		return nil, err
 	}
-	u := e.BaseURL + x.proto.Suffix(x.op, c.Model)
-	if q := stripKey(x.r.URL.RawQuery); q != "" {
+	u := e.BaseURL + x.proto.Suffix(x.op)
+	if q := x.r.URL.RawQuery; q != "" {
 		u += "?" + q
 	}
 	req, err := http.NewRequestWithContext(x.r.Context(), x.r.Method, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	copyEndToEnd(req.Header, x.r.Header, "Host", "Content-Length", "Authorization", "X-Api-Key", "X-Goog-Api-Key")
+	copyEndToEnd(req.Header, x.r.Header, "Host", "Content-Length", "Authorization", "X-Api-Key")
 	x.proto.DefaultHeaders(req.Header)
 	models.Authorize(req.Header, p, e)
 	if len(req.Header.Values("User-Agent")) == 0 {
@@ -497,24 +496,6 @@ func applyOverrides(body []byte, ops []config.Override) ([]byte, error) {
 		}
 	}
 	return body, nil
-}
-
-// stripKey removes the Gemini-style "key" parameter from a raw query and
-// keeps every other parameter byte for byte, in order.
-func stripKey(rawQuery string) string {
-	if rawQuery == "" {
-		return ""
-	}
-	parts := strings.Split(rawQuery, "&")
-	kept := parts[:0]
-	for _, p := range parts {
-		name, _, _ := strings.Cut(p, "=")
-		if n, err := url.QueryUnescape(name); err == nil && n == "key" {
-			continue
-		}
-		kept = append(kept, p)
-	}
-	return strings.Join(kept, "&")
 }
 
 // hopHeaders are the hop-by-hop headers of RFC 9110 section 7.6.1 plus the

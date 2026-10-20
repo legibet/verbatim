@@ -339,7 +339,7 @@ func isLoopback(host string) bool {
 }
 
 // protocols are the protocol ids, which name endpoints and affinity matches.
-var protocols = []string{"chat", "responses", "anthropic", "gemini", "images"}
+var protocols = []string{"chat", "responses", "anthropic", "images"}
 
 func (c *checker) providers(cfg *Config) {
 	if len(cfg.Providers) == 0 {
@@ -381,8 +381,6 @@ func (c *checker) providers(cfg *Config) {
 				auth = "bearer"
 			case "anthropic":
 				auth = "x-api-key"
-			case "gemini":
-				auth = "x-goog-api-key"
 			default:
 				c.errorf(epath, "unknown protocol; must be one of %s", strings.Join(protocols, ", "))
 			}
@@ -390,12 +388,12 @@ func (c *checker) providers(cfg *Config) {
 				e.Auth = auth
 			}
 			switch e.Auth {
-			case "bearer", "x-api-key", "x-goog-api-key":
+			case "bearer", "x-api-key":
 				usesKey = true
 			case "none", "":
 				// "" is an unknown protocol, already reported.
 			default:
-				c.errorf(epath+".auth", "must be one of bearer, x-api-key, x-goog-api-key, none, got %q", e.Auth)
+				c.errorf(epath+".auth", "must be one of bearer, x-api-key, none, got %q", e.Auth)
 			}
 
 			u, err := url.Parse(e.BaseURL)

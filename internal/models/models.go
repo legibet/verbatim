@@ -1,5 +1,5 @@
 // Package models keeps the provider endpoints' own model lists and assembles
-// the model listing served at /v1/models and /v1beta/models (design 6.5).
+// the model listing served at /v1/models (design 6.5).
 package models
 
 import (
@@ -310,12 +310,10 @@ func Authorize(h http.Header, p config.Provider, e config.Endpoint) {
 			h.Del(name)
 		}
 	}
-	switch protocol.AuthScheme(e.Auth) {
-	case protocol.AuthBearer:
+	switch e.Auth {
+	case "bearer":
 		h.Set("Authorization", "Bearer "+p.Key)
-	case protocol.AuthXAPIKey:
+	case "x-api-key":
 		h.Set("X-Api-Key", p.Key)
-	case protocol.AuthXGoogAPIKey:
-		h.Set("X-Goog-Api-Key", p.Key)
 	}
 }

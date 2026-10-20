@@ -81,7 +81,6 @@ func New(o Options) *Handler {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 	h.mux.HandleFunc("GET /v1/models", h.listModels)
-	h.mux.HandleFunc("GET /v1beta/models", h.listGeminiModels)
 	// Responses resource operations and the WebSocket transport (a GET on
 	// /v1/responses) are not supported in version 1 (design 4.4).
 	for _, pattern := range []string{
@@ -139,12 +138,11 @@ func (h *Handler) SetConfig(cfg *config.Config, mc *models.Cache) {
 func (h *Handler) Config() *config.Config { return h.rt.Load().cfg }
 
 // ServeHTTP tags every response with a request id, sends the protocol entry
-// points to the attempt loop, and everything else to the internal mux. The
-// Gemini entry point is not served in version 1 (design 2).
+// points to the attempt loop, and everything else to the internal mux.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := newRequestID()
 	w.Header().Set("X-Verbatim-Request-Id", id)
-	if p, op, _, ok := protocol.MatchPath(r.Method, r.URL.Path); ok && p.ID() != protocol.Gemini {
+	if p, op, ok := protocol.MatchPath(r.Method, r.URL.Path); ok {
 		h.forward(w, r, id, p, op)
 		return
 	}
@@ -189,8 +187,8 @@ func (h *Handler) Stats() Stats {
 	}
 }
 
-// authorized checks the client key (design 4.1): any one of the four
-// carriers matching is enough.
+// authorized checks the client key (design 4.1): either carrier matching is
+// enough.
 func (rt *runtime) authorized(r *http.Request) bool {
 	key := []byte(rt.cfg.Server.APIKey)
 	if len(key) == 0 {
@@ -200,7 +198,7 @@ func (rt *runtime) authorized(r *http.Request) bool {
 	if scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " "); ok && strings.EqualFold(scheme, "Bearer") && match(token) {
 		return true
 	}
-	return match(r.Header.Get("X-Api-Key")) || match(r.Header.Get("X-Goog-Api-Key")) || match(r.URL.Query().Get("key"))
+	return match(r.Header.Get("X-Api-Key"))
 }
 
 // listModels serves the OpenAI/Anthropic superset listing (design 6.5).
@@ -235,25 +233,6 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		FirstID *string `json:"first_id"`
 		LastID  *string `json:"last_id"`
 	}{"list", data, false, first, last})
-}
-
-// listGeminiModels serves the listing in Gemini's shape.
-func (h *Handler) listGeminiModels(w http.ResponseWriter, r *http.Request) {
-	rt := h.rt.Load()
-	if !rt.authorized(r) {
-		writeError(w, protocol.Lookup(protocol.Gemini), http.StatusUnauthorized, "unauthenticated", "missing or invalid API key")
-		return
-	}
-	type model struct {
-		Name        string `json:"name"`
-		DisplayName string `json:"displayName"`
-	}
-	names := rt.models.Names(r.Context())
-	list := make([]model, 0, len(names))
-	for _, n := range names {
-		list = append(list, model{Name: "models/" + n, DisplayName: n})
-	}
-	writeJSON(w, http.StatusOK, map[string][]model{"models": list})
 }
 
 // writeError writes a verbatim-generated error in the protocol's native

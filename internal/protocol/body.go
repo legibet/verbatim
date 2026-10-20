@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -73,29 +72,6 @@ func firstWithRole(list gjson.Result, roles ...string) gjson.Result {
 	return found
 }
 
-// modelIDs reads the model ids of a provider's model list: the string at
-// idPath of every element of the array at listPath, with trimPrefix removed.
-// It returns nil when the body is not such a list, and a non-nil (possibly
-// empty) slice when it is.
-func modelIDs(body []byte, listPath, idPath, trimPrefix string) []string {
-	if !gjson.ValidBytes(body) {
-		return nil
-	}
-	list := gjson.GetBytes(body, listPath)
-	if !list.IsArray() {
-		return nil
-	}
-	ids := []string{}
-	for _, m := range list.Array() {
-		if id := m.Get(idPath); id.Type == gjson.String {
-			if s := strings.TrimPrefix(id.Str, trimPrefix); s != "" {
-				ids = append(ids, s)
-			}
-		}
-	}
-	return ids
-}
-
 // openAIModelsPath is the OpenAI-style model list path. OpenAI does not page
 // it; an OpenAI-compatible relay that does takes after_id like Anthropic.
 func openAIModelsPath(after string) string {
@@ -107,11 +83,21 @@ func openAIModelsPath(after string) string {
 
 // dataModelList reads an OpenAI- or Anthropic-style model list page: ids from
 // data[].id, and as the next cursor the last_id when has_more is true
-// (Anthropic always pages, OpenAI-compatible relays sometimes).
+// (Anthropic always pages, OpenAI-compatible relays sometimes). ids is nil
+// when the body is not such a list, and non-nil (possibly empty) when it is.
 func dataModelList(body []byte) (ids []string, next string) {
-	ids = modelIDs(body, "data", "id", "")
-	if ids == nil {
+	if !gjson.ValidBytes(body) {
 		return nil, ""
+	}
+	list := gjson.GetBytes(body, "data")
+	if !list.IsArray() {
+		return nil, ""
+	}
+	ids = []string{}
+	for _, m := range list.Array() {
+		if id := m.Get("id"); id.Type == gjson.String && id.Str != "" {
+			ids = append(ids, id.Str)
+		}
 	}
 	if gjson.GetBytes(body, "has_more").Type == gjson.True {
 		next = gjson.GetBytes(body, "last_id").Str

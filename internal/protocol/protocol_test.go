@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"net/http"
 	"slices"
 	"testing"
@@ -12,7 +11,7 @@ func TestAllOrder(t *testing.T) {
 	for _, p := range All {
 		ids = append(ids, p.ID())
 	}
-	if want := []ID{Chat, Responses, Anthropic, Gemini, Images}; !slices.Equal(ids, want) {
+	if want := []ID{Chat, Responses, Anthropic, Images}; !slices.Equal(ids, want) {
 		t.Fatalf("All = %v, want %v", ids, want)
 	}
 	for _, id := range ids {
@@ -30,86 +29,64 @@ func TestMatchPath(t *testing.T) {
 		method, path string
 		id           ID
 		op           Operation
-		model        string
 	}{
-		{"POST", "/v1/chat/completions", Chat, Create, ""},
-		{"POST", "/v1/responses", Responses, Create, ""},
-		{"POST", "/v1/alpha/search", Responses, Search, ""},
-		{"POST", "/v1/images/generations", Images, Generate, ""},
-		{"POST", "/v1/images/edits", Images, Edit, ""},
-		{"POST", "/v1/messages", Anthropic, Create, ""},
-		{"POST", "/v1/messages/count_tokens", Anthropic, CountTokens, ""},
-		{"POST", "/v1beta/models/gemini-3.1-pro:generateContent", Gemini, Create, "gemini-3.1-pro"},
-		{"POST", "/v1beta/models/gemini-3.1-pro:streamGenerateContent", Gemini, Create, "gemini-3.1-pro"},
-		{"POST", "/v1beta/models/gemini-3.1-flash:countTokens", Gemini, CountTokens, "gemini-3.1-flash"},
+		{"POST", "/v1/chat/completions", Chat, Create},
+		{"POST", "/v1/responses", Responses, Create},
+		{"POST", "/v1/alpha/search", Responses, Search},
+		{"POST", "/v1/images/generations", Images, Generate},
+		{"POST", "/v1/images/edits", Images, Edit},
+		{"POST", "/v1/messages", Anthropic, Create},
+		{"POST", "/v1/messages/count_tokens", Anthropic, CountTokens},
 
-		{"GET", "/v1/chat/completions", "", "", ""},
-		{"POST", "/v1/chat/completions/", "", "", ""},
-		{"POST", "/v1/chat/completion", "", "", ""},
-		{"POST", "/v1/responses/", "", "", ""},
-		{"POST", "/v1/responses/abc", "", "", ""},
-		{"GET", "/v1/responses/abc", "", "", ""},
-		{"POST", "/v1/responses/compact", "", "", ""},
-		{"GET", "/v1/alpha/search", "", "", ""},
-		{"POST", "/alpha/search", "", "", ""},
-		{"GET", "/v1/images/generations", "", "", ""},
-		{"POST", "/v1/images/variations", "", "", ""},
-		{"POST", "/v1/messages/", "", "", ""},
-		{"GET", "/v1/messages", "", "", ""},
-		{"POST", "/v1/messages/count_tokens/", "", "", ""},
-		{"GET", "/v1/models", "", "", ""},
-		{"POST", "/v1/models", "", "", ""},
-		{"GET", "/v1beta/models/gemini-3.1-pro:generateContent", "", "", ""},
-		{"POST", "/v1beta/models/:generateContent", "", "", ""},
-		{"POST", "/v1beta/models/gemini-3.1-pro", "", "", ""},
-		{"POST", "/v1beta/models/gemini-3.1-pro:embedContent", "", "", ""},
-		{"POST", "/v1beta/models/a/b:generateContent", "", "", ""},
-		{"POST", "/v1beta/tunedModels/x:generateContent", "", "", ""},
-		{"POST", "/v1/chat/completions?x=1", "", "", ""},
+		{"GET", "/v1/chat/completions", "", ""},
+		{"POST", "/v1/chat/completions/", "", ""},
+		{"POST", "/v1/chat/completion", "", ""},
+		{"POST", "/v1/responses/", "", ""},
+		{"POST", "/v1/responses/abc", "", ""},
+		{"GET", "/v1/responses/abc", "", ""},
+		{"POST", "/v1/responses/compact", "", ""},
+		{"GET", "/v1/alpha/search", "", ""},
+		{"POST", "/alpha/search", "", ""},
+		{"GET", "/v1/images/generations", "", ""},
+		{"POST", "/v1/images/variations", "", ""},
+		{"POST", "/v1/messages/", "", ""},
+		{"GET", "/v1/messages", "", ""},
+		{"POST", "/v1/messages/count_tokens/", "", ""},
+		{"GET", "/v1/models", "", ""},
+		{"POST", "/v1/models", "", ""},
+		{"POST", "/v1/chat/completions?x=1", "", ""},
 	}
 	for _, tt := range tests {
-		p, op, model, ok := MatchPath(tt.method, tt.path)
+		p, op, ok := MatchPath(tt.method, tt.path)
 		if tt.id == "" {
 			if ok {
 				t.Errorf("%s %s matched %s/%s, want no match", tt.method, tt.path, p.ID(), op)
 			}
 			continue
 		}
-		if !ok || p.ID() != tt.id || op != tt.op || model != tt.model {
-			t.Errorf("%s %s = (%v, %q, %q, %v), want (%s, %q, %q)", tt.method, tt.path, p, op, model, ok, tt.id, tt.op, tt.model)
+		if !ok || p.ID() != tt.id || op != tt.op {
+			t.Errorf("%s %s = (%v, %q, %v), want (%s, %q)", tt.method, tt.path, p, op, ok, tt.id, tt.op)
 		}
 	}
 }
 
 func TestSuffix(t *testing.T) {
 	tests := []struct {
-		id    ID
-		op    Operation
-		model string
-		want  string
+		id   ID
+		op   Operation
+		want string
 	}{
-		{Chat, Create, "", "/chat/completions"},
-		{Responses, Create, "", "/responses"},
-		{Responses, Search, "", "/alpha/search"},
-		{Images, Generate, "", "/images/generations"},
-		{Images, Edit, "", "/images/edits"},
-		{Anthropic, Create, "", "/v1/messages"},
-		{Anthropic, CountTokens, "", "/v1/messages/count_tokens"},
-		{Gemini, Create, "gemini-3.1-pro", "/v1beta/models/gemini-3.1-pro:generateContent"},
-		{Gemini, CountTokens, "gemini-3.1-pro", "/v1beta/models/gemini-3.1-pro:countTokens"},
+		{Chat, Create, "/chat/completions"},
+		{Responses, Create, "/responses"},
+		{Responses, Search, "/alpha/search"},
+		{Images, Generate, "/images/generations"},
+		{Images, Edit, "/images/edits"},
+		{Anthropic, Create, "/v1/messages"},
+		{Anthropic, CountTokens, "/v1/messages/count_tokens"},
 	}
 	for _, tt := range tests {
-		if got := Lookup(tt.id).Suffix(tt.op, tt.model); got != tt.want {
+		if got := Lookup(tt.id).Suffix(tt.op); got != tt.want {
 			t.Errorf("%s Suffix(%s) = %q, want %q", tt.id, tt.op, got, tt.want)
-		}
-	}
-}
-
-func TestDefaultAuth(t *testing.T) {
-	want := map[ID]AuthScheme{Chat: AuthBearer, Responses: AuthBearer, Anthropic: AuthXAPIKey, Gemini: AuthXGoogAPIKey}
-	for id, auth := range want {
-		if got := Lookup(id).DefaultAuth(); got != auth {
-			t.Errorf("%s DefaultAuth = %q, want %q", id, got, auth)
 		}
 	}
 }
@@ -127,7 +104,7 @@ func TestDefaultHeaders(t *testing.T) {
 		t.Errorf("client anthropic-version replaced: %q", got)
 	}
 
-	for _, id := range []ID{Chat, Responses, Gemini} {
+	for _, id := range []ID{Chat, Responses, Images} {
 		h := http.Header{}
 		Lookup(id).DefaultHeaders(h)
 		if len(h) != 0 {
@@ -159,9 +136,6 @@ func TestModelFromBody(t *testing.T) {
 			}
 		}
 	}
-	if got, err := Lookup(Gemini).ModelFromBody([]byte(`{"model":"x"}`), "application/json"); got != "" || err != nil {
-		t.Errorf("gemini ModelFromBody = %q, %v; want \"\", nil", got, err)
-	}
 }
 
 func TestSetModel(t *testing.T) {
@@ -187,10 +161,6 @@ func TestSetModel(t *testing.T) {
 			}
 		}
 	}
-	body := []byte(`{"contents":[], "model":"x"}`)
-	if got, err := Lookup(Gemini).SetModel(body, "application/json", "y"); err != nil || !bytes.Equal(got, body) {
-		t.Errorf("gemini SetModel = %q, %v; want body unchanged", got, err)
-	}
 }
 
 func TestStream(t *testing.T) {
@@ -212,9 +182,6 @@ func TestStream(t *testing.T) {
 				t.Errorf("%s Stream(%s) = %v, want %v", id, tt.body, got, tt.want)
 			}
 		}
-	}
-	if Lookup(Gemini).Stream([]byte(`{"stream":true}`), "application/json") {
-		t.Error("gemini Stream = true, want false")
 	}
 }
 
@@ -281,23 +248,6 @@ func TestPrefixForHash(t *testing.T) {
 			id:   Anthropic,
 			body: `{"system":"s","messages":[]}`,
 		},
-		{
-			name: "gemini systemInstruction",
-			id:   Gemini,
-			body: `{"systemInstruction":{"parts":[{"text":"Be terse."}]},"contents":[{"role":"user","parts":[{"text":"Hi"}]},{"role":"model","parts":[{"text":"Hello"}]}]}`,
-			want: "gemini\x00" + `{"parts":[{"text":"Be terse."}]}` + "\x00" + `{"role":"user","parts":[{"text":"Hi"}]}`,
-		},
-		{
-			name: "gemini system_instruction",
-			id:   Gemini,
-			body: `{"system_instruction":{"parts":[{"text":"S"}]},"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`,
-			want: "gemini\x00" + `{"parts":[{"text":"S"}]}` + "\x00" + `{"role":"user","parts":[{"text":"Hi"}]}`,
-		},
-		{
-			name: "gemini content without role",
-			id:   Gemini,
-			body: `{"contents":[{"parts":[{"text":"Hi"}]}]}`,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -336,7 +286,7 @@ func TestContinuationRef(t *testing.T) {
 			t.Errorf("ContinuationRef(%s) = %q, %v; want %q", tt.body, got, ok, tt.want)
 		}
 	}
-	for _, id := range []ID{Chat, Anthropic, Gemini} {
+	for _, id := range []ID{Chat, Anthropic, Images} {
 		if got, ok := Lookup(id).ContinuationRef([]byte(`{"previous_response_id":"resp_abc"}`)); ok || got != "" {
 			t.Errorf("%s ContinuationRef = %q, %v; want none", id, got, ok)
 		}
@@ -353,11 +303,6 @@ func TestErrorBody(t *testing.T) {
 		{Chat, 404, "no_route", `{"error":{"message":"no route for \"x\"","type":"verbatim_error","code":"no_route"}}`},
 		{Responses, 404, "no_route", `{"error":{"message":"no route for \"x\"","type":"verbatim_error","code":"no_route"}}`},
 		{Anthropic, 404, "no_route", `{"type":"error","error":{"type":"api_error","message":"no_route: no route for \"x\""}}`},
-		{Gemini, 404, "no_route", `{"error":{"code":404,"message":"no_route: no route for \"x\"","status":"NOT_FOUND"}}`},
-		{Gemini, 401, "no_route", `{"error":{"code":401,"message":"no_route: no route for \"x\"","status":"UNAUTHENTICATED"}}`},
-		{Gemini, 413, "no_route", `{"error":{"code":413,"message":"no_route: no route for \"x\"","status":"FAILED_PRECONDITION"}}`},
-		{Gemini, 502, "no_route", `{"error":{"code":502,"message":"no_route: no route for \"x\"","status":"UNAVAILABLE"}}`},
-		{Gemini, 503, "no_route", `{"error":{"code":503,"message":"no_route: no route for \"x\"","status":"UNAVAILABLE"}}`},
 	}
 	for _, tt := range tests {
 		if got := string(Lookup(tt.id).ErrorBody(tt.status, tt.code, `no route for "x"`)); got != tt.want {
@@ -373,7 +318,6 @@ func TestModelsPath(t *testing.T) {
 	}{
 		{Chat, "/models", "/models?after_id=a%2Fb"},
 		{Anthropic, "/v1/models?limit=1000", "/v1/models?after_id=a%2Fb&limit=1000"},
-		{Gemini, "/v1beta/models?pageSize=1000", "/v1beta/models?pageSize=1000&pageToken=a%2Fb"},
 	}
 	for _, tt := range tests {
 		p := Lookup(tt.id)
@@ -426,23 +370,10 @@ func TestModelList(t *testing.T) {
 			body: `{"data":[{"type":"model","id":"claude-haiku-5-5"}],"has_more":false,"first_id":"claude-haiku-5-5","last_id":"claude-haiku-5-5"}`,
 			ids:  []string{"claude-haiku-5-5"},
 		},
-		{
-			name: "gemini page",
-			id:   Gemini,
-			body: `{"models":[{"name":"models/gemini-3.1-pro","version":"3.1","displayName":"Gemini 3.1 Pro","supportedGenerationMethods":["generateContent","countTokens"]},{"name":"models/gemini-3.1-flash"}],"nextPageToken":"abc"}`,
-			ids:  []string{"gemini-3.1-pro", "gemini-3.1-flash"},
-			next: "abc",
-		},
-		{
-			name: "gemini last page",
-			id:   Gemini,
-			body: `{"models":[{"name":"models/gemini-3.1-pro"}]}`,
-			ids:  []string{"gemini-3.1-pro"},
-		},
 		{name: "empty list", id: Chat, body: `{"object":"list","data":[]}`, ids: []string{}},
 		{name: "not a list", id: Chat, body: `{"error":{"message":"bad key"}}`},
 		{name: "truncated", id: Anthropic, body: `{"data":[{"id":"a"}`},
-		{name: "html", id: Gemini, body: `<html>502</html>`},
+		{name: "html", id: Chat, body: `<html>502</html>`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
