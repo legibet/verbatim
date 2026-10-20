@@ -25,7 +25,7 @@ const usageText = `verbatim is a small LLM API gateway.
 
 Usage:
   verbatim [serve] [-c config.yaml] [-v]   run the gateway (default command)
-  verbatim check   [-c config.yaml]        validate the configuration and exit
+  verbatim check   [-c config.yaml] [--probe]  validate the configuration; --probe also tries each endpoint
   verbatim usage   [--since 7d] [--by model|provider|route|day] [--protocol p] [--json]
   verbatim log     [--tail] [--since 1h] [--status 5xx] [--provider p] [--errors] [--json]
   verbatim log     <request_id>            one request in full

@@ -243,7 +243,8 @@ func loadPricing(cfg *config.Config) *pricing.Table {
 }
 
 func check(args []string) int {
-	fs, cfgPath := newFlags("check", "check [-c config.yaml]")
+	fs, cfgPath := newFlags("check", "check [-c config.yaml] [--probe]")
+	probing := fs.Bool("probe", false, "also send an empty request to every endpoint to check its base_url and key")
 	pos, code, ok := parse(fs, args)
 	if !ok {
 		return code
@@ -298,6 +299,25 @@ func check(args []string) int {
 		fmt.Printf("warning: pricing: %s\n", w)
 	}
 	fmt.Printf("pricing: %d models from %d sources (%s)\n", len(prices.Models()), len(cfg.Pricing.Sources), cfg.Pricing.Cache)
+
+	if *probing {
+		fmt.Println("\nprobe: an empty request to each endpoint, which generates nothing")
+		var rows [][]string
+		failed := 0
+		for _, r := range probe(cfg) {
+			result := "ok"
+			if r.problem != "" {
+				result = r.problem
+				failed++
+			}
+			rows = append(rows, []string{r.endpoint, result})
+		}
+		newTable(column{name: "ENDPOINT"}, column{name: "RESULT"}).print(os.Stdout, rows, false)
+		if failed > 0 {
+			fmt.Printf("%d of %d endpoints failed\n", failed, len(rows))
+			return 1
+		}
+	}
 	fmt.Println("ok")
 	return 0
 }

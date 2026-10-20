@@ -535,7 +535,7 @@ plus the cache terms above. An `images` request is priced only by an entry with 
 
 ```
 verbatim serve   [-c config.yaml]            run the gateway (default command)
-verbatim check   [-c config.yaml]            validate the configuration and exit
+verbatim check   [-c config.yaml] [--probe]  validate the configuration; --probe also tries each endpoint
 verbatim usage   [--since 7d] [--by model|provider|route|day] [--protocol p] [--json]
 verbatim log     [--tail] [--since 1h] [--status 5xx] [--provider p] [--errors] [--json]
 verbatim log     <request_id>                full row including routing_json, attempt_log, usage_json
@@ -544,7 +544,7 @@ verbatim pricing show <model>
 verbatim status                              breaker states, pin count, model-list ages (asks the running server)
 ```
 
-`serve` reads its configuration file again on `SIGHUP` (section 6.6). `usage` and `log` read the SQLite file directly and work while `serve` is running. `status` calls the running server's `/ui/api/providers`, because breakers and pins live in its memory. The CLI is the quick path; the web UI is the primary way to inspect traffic.
+`check --probe` also sends every endpoint an empty JSON request (`{}`) at the path of its main operation (`create`, or `generate` for `images`), with the headers and key the gateway would send, to check its `base_url` and key; an empty request generates nothing. No reply means the host, port, or scheme is wrong; 401 or 403 means the key is rejected; a redirect, 404, or a reply that is not JSON means `base_url` does not lead to the API. Anything else, typically 400 for the missing fields, counts as ok. An ok is not proof: an upstream that answers every path under a prefix (Alibaba Bailian's `/compatible-mode/v1/`) hides an extra path segment, and one that does not check keys hides a wrong key. Any failure makes `check` exit with 1. `serve` reads its configuration file again on `SIGHUP` (section 6.6). `usage` and `log` read the SQLite file directly and work while `serve` is running. `status` calls the running server's `/ui/api/providers`, because breakers and pins live in its memory. The CLI is the quick path; the web UI is the primary way to inspect traffic.
 
 ## 14. Web UI
 

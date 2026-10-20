@@ -39,7 +39,7 @@ or `go build -o verbatim ./cmd/verbatim`.
 ## Quick start
 
 1. Copy `verbatim.example.yaml` to `./verbatim.yaml` (or `~/.verbatim/verbatim.yaml`) and edit it. The example is annotated and covers every section.
-2. Export the keys it references (`${OPENAI_KEY}` and so on) and run `verbatim check`.
+2. Export the keys it references (`${OPENAI_KEY}` and so on) and run `verbatim check`; `verbatim check --probe` also sends each endpoint an empty request to check its base_url and key.
 3. `verbatim serve`, then point a client at it:
 
 ```sh
@@ -108,7 +108,7 @@ The running server reads the file again on `SIGHUP` (`pkill -HUP verbatim`) or o
 
 ```
 verbatim [serve] [-c config.yaml] [-v]   run the gateway (default command)
-verbatim check   [-c config.yaml]        validate the configuration and exit
+verbatim check   [-c config.yaml] [--probe]  validate the configuration; --probe also tries each endpoint
 verbatim usage   [--since 7d] [--by model|provider|route|day] [--protocol p] [--json]
 verbatim log     [--tail] [--since 1h] [--status 5xx] [--provider p] [--errors] [--json]
 verbatim log     <request_id>            one request in full: routing, attempts, usage, price
