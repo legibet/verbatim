@@ -95,10 +95,9 @@ export function App() {
           )}
         </main>
 
-        <footer className="shrink-0 border-t">
-          <div className="mx-auto flex h-8 max-w-[1600px] items-center justify-between px-6 text-[11.5px] text-muted-foreground">
-            <span>The gateway log and live state. Costs are configured list prices.</span>
-            {hasKey && (
+        {hasKey && (
+          <footer className="shrink-0 border-t">
+            <div className="mx-auto flex h-8 max-w-[1600px] items-center justify-end px-6 text-[11.5px] text-muted-foreground">
               <button
                 type="button"
                 className="cursor-pointer underline-offset-4 outline-none transition-[scale] duration-150 active:scale-[0.97] focus-visible:underline [@media(hover:hover)]:hover:text-foreground [@media(hover:hover)]:hover:underline"
@@ -106,9 +105,9 @@ export function App() {
               >
                 Forget API key
               </button>
-            )}
-          </div>
-        </footer>
+            </div>
+          </footer>
+        )}
       </div>
     </TooltipProvider>
   )

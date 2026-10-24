@@ -40,7 +40,7 @@ export function Providers() {
               </>
             )}
           </span>
-          <span className="text-muted-foreground">One row per provider endpoint. Counts cover the last hour. Refreshes every 5 s.</span>
+          <span className="text-muted-foreground">Counts cover the last hour.</span>
         </div>
         <div className="overflow-x-auto rounded-lg border">
           <Table>
@@ -176,10 +176,6 @@ function ConfigSection({ onReloaded }: { onReloaded: () => void }) {
       >
         Configuration
       </SectionTitle>
-      <p className="mb-3 max-w-[72ch] text-muted-foreground">
-        Reload reads the configuration file again, as SIGHUP does. Running requests finish under the previous
-        configuration; pins are kept, and circuit breakers and model lists start afresh.
-      </p>
       {result && (
         <div role="status" className="mb-3 space-y-1">
           {result instanceof Error ? (

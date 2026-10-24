@@ -104,29 +104,18 @@ function Unpriced({ models }: { models: UsageView["unpriced_models"] }) {
     <section>
       <SectionTitle>Unpriced models</SectionTitle>
       {models.length === 0 ? (
-        <p className="text-muted-foreground">Every model with usage in this range has a price.</p>
+        <p className="text-muted-foreground">None in this range.</p>
       ) : (
-        <div className="space-y-2">
-          <p className="max-w-[72ch] text-muted-foreground">
-            These client model names had usage in this range and still have no price. Sync prices on the{" "}
-            <a href="#/models" className="text-foreground underline underline-offset-3">
-              Models
-            </a>{" "}
-            view if a source has added one, map the name to a priced name in{" "}
-            <code className="font-mono text-foreground">pricing.aliases</code>, or price it in{" "}
-            <code className="font-mono text-foreground">pricing.overrides</code>.
-          </p>
-          <ul className="w-fit min-w-80 divide-y divide-rule rounded-lg border">
-            {models.map((m) => (
-              <li key={m.model} className="flex items-baseline justify-between gap-8 px-3.5 py-2">
-                <span className="font-medium">{m.model || "(no model)"}</span>
-                <span className="num text-muted-foreground">
-                  {fmtInt(m.count)} {m.count === 1 ? "request" : "requests"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <ul className="w-fit min-w-80 divide-y divide-rule rounded-lg border">
+          {models.map((m) => (
+            <li key={m.model} className="flex items-baseline justify-between gap-8 px-3.5 py-2">
+              <span className="font-medium">{m.model || "(no model)"}</span>
+              <span className="num text-muted-foreground">
+                {fmtInt(m.count)} {m.count === 1 ? "request" : "requests"}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   )
@@ -167,7 +156,7 @@ function Totals({ t }: { t: Aggregate }) {
         ))}
       </div>
       <p className="mt-2 text-muted-foreground">
-        <Coverage a={t} /> Cost covers priced requests only; count_tokens and search requests are excluded.
+        <Coverage a={t} />
       </p>
     </div>
   )
