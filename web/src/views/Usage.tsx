@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import uPlot from "uplot"
 import "uplot/dist/uPlot.min.css"
-import { isConfigView, isObject, isPricingSync, isUsageView, postJSON, useApi, type Aggregate, type PricingSync, type UsageView } from "@/api"
-import { Dash, ErrorLine, FilterSelect, Mark, RangePicker, SectionTitle } from "@/common"
-import { Button } from "@/components/ui/button"
+import { isConfigView, isObject, isUsageView, useApi, type Aggregate, type UsageView } from "@/api"
+import { Dash, ErrorLine, FilterSelect, RangePicker, SectionTitle } from "@/common"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { fmtInt, fmtUSD, query, rangeParams, type TimeRange } from "@/format"
@@ -92,78 +91,29 @@ export function Usage() {
             <Breakdown rows={data.rows} total={data.total} by={by} />
           </section>
 
-          <Unpriced models={data.unpriced_models} onSynced={reload} />
+          <Unpriced models={data.unpriced_models} />
         </>
       )}
     </div>
   )
 }
 
-// Unpriced lists the client model names that still have no price and offers
-// a price sync: the server downloads pricing.sources as `verbatim pricing
-// sync` does. The new prices apply to new requests; logged requests keep
-// their cost.
-function Unpriced({ models, onSynced }: { models: UsageView["unpriced_models"]; onSynced: () => void }) {
-  const [syncing, setSyncing] = useState(false)
-  const [result, setResult] = useState<PricingSync | Error | null>(null)
-  const sync = async () => {
-    setSyncing(true)
-    try {
-      setResult(await postJSON("pricing/sync", isPricingSync))
-      onSynced()
-    } catch (e) {
-      setResult(e instanceof Error ? e : new Error(String(e)))
-    } finally {
-      setSyncing(false)
-    }
-  }
-
+// Unpriced lists the client model names that still have no price.
+function Unpriced({ models }: { models: UsageView["unpriced_models"] }) {
   return (
     <section>
-      <SectionTitle
-        aside={
-          <Button variant="outline" size="sm" disabled={syncing} onClick={() => void sync()}>
-            {syncing ? "Syncing prices" : "Sync prices"}
-          </Button>
-        }
-      >
-        Unpriced models
-      </SectionTitle>
-      {result && (
-        <div role="status" className="mb-3 space-y-1">
-          {result instanceof Error ? (
-            <Mark tone="err" className="whitespace-normal text-err-ink">
-              Sync failed: {result.message}
-            </Mark>
-          ) : (
-            <>
-              <p>
-                <Mark tone="ok">{fmtInt(result.models)} models in the price table.</Mark>{" "}
-                <span className="text-muted-foreground">New requests are priced with it; logged requests keep their cost.</span>
-              </p>
-              {result.warnings.length > 0 && (
-                <details>
-                  <summary className="w-fit cursor-pointer text-muted-foreground select-none">
-                    {fmtInt(result.warnings.length)} {result.warnings.length === 1 ? "warning" : "warnings"}
-                  </summary>
-                  <ul className="mt-1 max-w-[100ch] space-y-0.5 font-mono text-[12px] text-muted-foreground">
-                    {result.warnings.map((w, i) => (
-                      <li key={i}>{w}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      <SectionTitle>Unpriced models</SectionTitle>
       {models.length === 0 ? (
         <p className="text-muted-foreground">Every model with usage in this range has a price.</p>
       ) : (
         <div className="space-y-2">
           <p className="max-w-[72ch] text-muted-foreground">
-            These client model names had usage in this range and still have no price. Sync prices if a source has added one, map the
-            name to a priced name in <code className="font-mono text-foreground">pricing.aliases</code>, or price it in{" "}
+            These client model names had usage in this range and still have no price. Sync prices on the{" "}
+            <a href="#/models" className="text-foreground underline underline-offset-3">
+              Models
+            </a>{" "}
+            view if a source has added one, map the name to a priced name in{" "}
+            <code className="font-mono text-foreground">pricing.aliases</code>, or price it in{" "}
             <code className="font-mono text-foreground">pricing.overrides</code>.
           </p>
           <ul className="w-fit min-w-80 divide-y divide-rule rounded-lg border">

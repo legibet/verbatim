@@ -2,19 +2,20 @@ import { useEffect, useState } from "react"
 import { getKey, setKey, useKeyVersion } from "@/api"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import { Models } from "@/views/Models"
 import { Providers } from "@/views/Providers"
 import { Requests } from "@/views/Requests"
 import { Usage } from "@/views/Usage"
 
 // Views live in the URL hash so a request detail is linkable:
-// #/requests, #/requests/123, #/usage, #/providers.
+// #/requests, #/requests/123, #/usage, #/models, #/providers.
 
-type View = "requests" | "usage" | "providers"
+type View = "requests" | "usage" | "models" | "providers"
 type Route = { view: View; id: number | null }
 
 function parseHash(hash: string): Route {
   const [view, id] = hash.replace(/^#\/?/, "").split("/")
-  if (view === "usage" || view === "providers") return { view, id: null }
+  if (view === "usage" || view === "models" || view === "providers") return { view, id: null }
   const n = Number(id)
   return { view: "requests", id: id && Number.isInteger(n) && n > 0 ? n : null }
 }
@@ -32,6 +33,7 @@ function useRoute(): Route {
 const NAV: { view: View; label: string }[] = [
   { view: "requests", label: "Requests" },
   { view: "usage", label: "Usage" },
+  { view: "models", label: "Models" },
   { view: "providers", label: "Providers" },
 ]
 
@@ -74,6 +76,13 @@ export function App() {
             <div className="h-full overflow-y-auto">
               <div className="mx-auto max-w-[1600px] px-6">
                 <Usage />
+              </div>
+            </div>
+          )}
+          {route.view === "models" && (
+            <div className="h-full overflow-y-auto">
+              <div className="mx-auto max-w-[1600px] px-6">
+                <Models />
               </div>
             </div>
           )}

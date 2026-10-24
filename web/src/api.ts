@@ -97,12 +97,36 @@ export type EndpointView = {
   breaker: { state: "closed" | "open" | "half_open"; failures: number; open_until: string | null }
   pins: number
   models_age_s: number | null
+  models_error: string // "" when the last model list fetch succeeded
   committed: number
   failover: number
   error_events: number
 }
 
 export type ProvidersView = { endpoints: EndpointView[]; log_dropped: number; pins_total: number }
+
+// USD per 1M tokens; the image prices apply to an images request's image tokens.
+export type TargetPrice = {
+  input: number
+  output: number | null
+  cache_read: number | null
+  image_input: number | null
+  image_output: number | null
+}
+
+export type ModelTarget = { provider: string; upstream_model: string; priority: number; price: TargetPrice | null } // null: unpriced
+
+export type ModelView = {
+  name: string
+  routes: string[] // the protocols' routes, each once
+  protocols: { protocol: string; route: string; targets: ModelTarget[] }[] // targets by ascending priority
+}
+
+export type ModelsView = {
+  models: ModelView[]
+  unlisted: string[] // pattern routes that list no name
+  failing: { endpoint: string; error: string }[]
+}
 
 export type ConfigView = Record<string, unknown>
 
@@ -124,6 +148,8 @@ export const isUsageView = (v: unknown): v is UsageView =>
   isObject(v) && Array.isArray(v.rows) && isObject(v.total) && Array.isArray(v.daily)
 export const isProvidersView = (v: unknown): v is ProvidersView =>
   isObject(v) && Array.isArray(v.endpoints)
+export const isModelsView = (v: unknown): v is ModelsView =>
+  isObject(v) && Array.isArray(v.models) && Array.isArray(v.unlisted) && Array.isArray(v.failing)
 export const isConfigView = (v: unknown): v is ConfigView => isObject(v)
 export const isPricingSync = (v: unknown): v is PricingSync =>
   isObject(v) && typeof v.models === "number" && Array.isArray(v.warnings)

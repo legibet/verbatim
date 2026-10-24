@@ -8,11 +8,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"verbatim/internal/config"
+	"verbatim/internal/models"
 	"verbatim/internal/pricing"
 	"verbatim/internal/proxy"
 	"verbatim/internal/route"
@@ -361,9 +363,12 @@ func TestProviders(t *testing.T) {
 			"alpha.anthropic": {State: "open", Failures: 3, OpenUntil: openUntil},
 			"beta.chat":       {State: "closed", Failures: 1},
 		},
-		Pins:       map[string]int{"alpha.anthropic": 4},
-		PinsTotal:  4,
-		ModelsAge:  map[string]time.Duration{"beta.chat": 90 * time.Second},
+		Pins:      map[string]int{"alpha.anthropic": 4},
+		PinsTotal: 4,
+		Models: map[string]models.State{
+			"alpha.anthropic": {Err: "GET https://alpha.example/anthropic/v1/models: HTTP 404"},
+			"beta.chat":       {Fetched: time.Now().Add(-90 * time.Second)},
+		},
 		LogDropped: 7,
 	})
 	rec := get(t, h, "/ui/api/providers", "")
@@ -374,7 +379,8 @@ func TestProviders(t *testing.T) {
 	alphaAnth, alphaChat, beta, gamma := v.Endpoints[0], v.Endpoints[1], v.Endpoints[2], v.Endpoints[3]
 	if alphaAnth.Provider != "alpha" || alphaAnth.Protocol != "anthropic" || alphaAnth.Breaker.State != "open" ||
 		alphaAnth.Breaker.OpenUntil == nil || !alphaAnth.Breaker.OpenUntil.Equal(openUntil) ||
-		alphaAnth.Pins != 4 || alphaAnth.Committed != 3 || alphaAnth.Failover != 0 || alphaAnth.ErrorEvents != 1 || alphaAnth.ModelsAgeS != nil {
+		alphaAnth.Pins != 4 || alphaAnth.Committed != 3 || alphaAnth.Failover != 0 || alphaAnth.ErrorEvents != 1 || alphaAnth.ModelsAgeS != nil ||
+		alphaAnth.ModelsError != "GET https://alpha.example/anthropic/v1/models: HTTP 404" {
 		t.Errorf("alpha anthropic %+v", alphaAnth)
 	}
 	if alphaAnth.BaseURL != "https://alpha.example/anthropic" {
@@ -387,7 +393,7 @@ func TestProviders(t *testing.T) {
 		t.Errorf("alpha chat %+v", alphaChat)
 	}
 	if beta.Breaker.State != "closed" || beta.Breaker.Failures != 1 || beta.Breaker.OpenUntil != nil ||
-		beta.ModelsAgeS == nil || *beta.ModelsAgeS != 90 || beta.Committed != 2 || beta.Failover != 0 {
+		beta.ModelsAgeS == nil || *beta.ModelsAgeS < 90 || *beta.ModelsAgeS > 91 || beta.ModelsError != "" || beta.Committed != 2 || beta.Failover != 0 {
 		t.Errorf("beta %+v", beta)
 	}
 	// An endpoint with no live state at all still appears.
@@ -541,5 +547,91 @@ func TestConfigReload(t *testing.T) {
 	}
 	if rec := get(t, h, "/ui/api/config", "new-key"); rec.Code != http.StatusOK {
 		t.Errorf("new key after reload: status %d", rec.Code)
+	}
+}
+
+func TestModels(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"data":[{"id":"m-1"},{"id":"other"}],"has_more":false}`)
+	}))
+	defer up.Close()
+	cfg, _, err := config.Parse(fmt.Appendf(nil, `
+providers:
+  up: {key: k, endpoints: {chat: {base_url: %[1]s/v1}, anthropic: {base_url: %[1]s}}}
+  bad: {key: k, endpoints: {chat: {base_url: %[1]s/bad/v1}}}
+routes:
+  - model: exact-m
+    targets: [{provider: up.chat}]
+  - model: "m-*"
+    targets: [{provider: up.chat}, {provider: bad, model: "bad-*", priority: 2}]
+  - model: "m-1*"
+    targets: [{provider: up.anthropic}]
+  - model: "*"
+    discover: false
+    targets: [{provider: up}]
+`, up.URL), "test.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	overrides := filepath.Join(dir, "overrides.json")
+	if err := os.WriteFile(overrides, []byte(`{"models":{"m-1":{"cost":{"input":1,"output":2}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prices, _, err := pricing.Load(dir, nil, overrides, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := models.New(cfg, nil, time.Hour, 5*time.Second)
+	h := New(Options{
+		Store:   newStore(t, nil),
+		Stats:   func() proxy.Stats { return proxy.Stats{} },
+		Config:  func() *config.Config { return cfg },
+		Models:  func() *models.Cache { return mc },
+		Pricing: func() *pricing.Table { return prices },
+	})
+
+	// Nothing fetched yet: only the exact route lists its name.
+	v := decode[ModelsView](t, get(t, h, "/ui/api/models", ""))
+	if len(v.Models) != 1 || v.Models[0].Name != "exact-m" || !slices.Equal(v.Unlisted, []string{"m-*", "m-1*", "*"}) || len(v.Failing) != 0 {
+		t.Errorf("before a fetch: %+v", v)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/ui/api/models/refresh", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	v = decode[ModelsView](t, rec)
+	if len(v.Models) != 2 || !slices.Equal(v.Unlisted, []string{"*"}) {
+		t.Fatalf("after a refresh: %+v", v)
+	}
+	exact, m1 := v.Models[0], v.Models[1]
+	if !slices.Equal(exact.Routes, []string{"exact-m"}) || len(exact.Protocols) != 1 || exact.Protocols[0].Protocol != "chat" ||
+		len(exact.Protocols[0].Targets) != 1 || exact.Protocols[0].Targets[0].Price != nil {
+		t.Errorf("exact-m %+v", exact)
+	}
+	// m-1 is listed by up's chat endpoint under m-*, where bad, the second
+	// tier, is sent its own model name, and by up's anthropic endpoint under
+	// m-1*, which serves m-1's anthropic requests.
+	if m1.Name != "m-1" || !slices.Equal(m1.Routes, []string{"m-*", "m-1*"}) || len(m1.Protocols) != 2 {
+		t.Fatalf("m-1 %+v", m1)
+	}
+	chat, anth := m1.Protocols[0].Targets, m1.Protocols[1].Targets
+	if m1.Protocols[0].Protocol != "chat" || m1.Protocols[0].Route != "m-*" || len(chat) != 2 ||
+		m1.Protocols[1].Protocol != "anthropic" || m1.Protocols[1].Route != "m-1*" || len(anth) != 1 || anth[0].Provider != "up" {
+		t.Fatalf("m-1 protocols %+v", m1.Protocols)
+	}
+	if chat[0].Provider != "up" || chat[0].UpstreamModel != "m-1" || chat[0].Priority != 1 ||
+		chat[0].Price == nil || chat[0].Price.Input != 1 || *chat[0].Price.Output != 2 {
+		t.Errorf("m-1 chat first target %+v", chat[0])
+	}
+	if chat[1].Provider != "bad" || chat[1].UpstreamModel != "bad-1" || chat[1].Priority != 2 || chat[1].Price == nil {
+		t.Errorf("m-1 chat second target %+v", chat[1])
+	}
+	if len(v.Failing) != 1 || v.Failing[0].Endpoint != "bad.chat" || !strings.Contains(v.Failing[0].Error, "HTTP 404") {
+		t.Errorf("failing %+v", v.Failing)
 	}
 }

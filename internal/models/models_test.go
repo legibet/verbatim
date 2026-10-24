@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"verbatim/internal/config"
+	"verbatim/internal/protocol"
 )
 
 // provider serves GET /models with the pages given, keyed by the after_id
@@ -94,14 +95,14 @@ routes:
 		t.Fatal(err)
 	}
 	c := New(cfg, nil, time.Minute, time.Second)
-	var names []string
+	var fetched []string
 	for _, e := range c.endpoints {
-		names = append(names, e.name())
+		fetched = append(fetched, e.name())
 	}
-	if want := []string{"multi.anthropic", "multi.chat", "prefixed.chat"}; !slices.Equal(names, want) {
-		t.Fatalf("endpoints to fetch = %v, want %v", names, want)
+	if want := []string{"multi.anthropic", "multi.chat", "prefixed.chat"}; !slices.Equal(fetched, want) {
+		t.Fatalf("endpoints to fetch = %v, want %v", fetched, want)
 	}
-	if got := c.Names(context.Background()); !slices.Equal(got, []string{"kimi-k3"}) {
+	if got := names(c); !slices.Equal(got, []string{"kimi-k3"}) {
 		t.Errorf("before any fetch: %v", got)
 	}
 	for _, e := range c.endpoints {
@@ -116,8 +117,25 @@ routes:
 	// prefixed's ids map back through openai/gpt-* to gpt-7 and gpt-5 (already
 	// listed) and gpt-4x (owned by gpt-4*); the others do not match it.
 	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c"}
-	if got := c.Names(context.Background()); !slices.Equal(got, want) {
+	if got := names(c); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
+	}
+	// Each name carries the protocols whose lists name it and their routes.
+	for _, l := range c.Names(context.Background()) {
+		var want []Served
+		switch l.Name {
+		case "kimi-k3":
+			want = []Served{{protocol.Chat, "kimi-k3"}}
+		case "gpt-6":
+			want = []Served{{protocol.Anthropic, "gpt-*"}}
+		case "gpt-5":
+			want = []Served{{protocol.Chat, "gpt-*"}}
+		default:
+			continue
+		}
+		if !slices.Equal(l.Served, want) {
+			t.Errorf("Names() %s: %+v, want %+v", l.Name, l.Served, want)
+		}
 	}
 	if rewrite.header.Load() != nil || unused.header.Load() != nil {
 		t.Error("a provider discovery does not read was fetched")
@@ -131,17 +149,25 @@ routes:
 	if h.Get("X-Api-Key") != "km" || h.Get("Anthropic-Version") != "2023-06-01" || h.Get("Authorization") != "" {
 		t.Errorf("anthropic headers: %v", h)
 	}
-	if ages := c.Ages(); len(ages) != 3 || ages["multi.chat"] < 0 || ages["multi.chat"] > time.Minute {
-		t.Errorf("Ages() = %v", ages)
+	states := c.States()
+	if s := states["multi.chat"]; len(states) != 3 || s.Fetched.IsZero() || s.Err != "" {
+		t.Errorf("States() = %v", states)
 	}
 
-	// A failed refresh keeps the previous list.
+	// A failed refresh keeps the previous list and records the error; the
+	// next success clears it.
 	chat.fail.Store(true)
-	if err := c.refresh(context.Background(), endpoint{"multi", "chat"}); err == nil {
-		t.Error("refresh of a failing provider succeeded")
-	}
-	if got := c.Names(context.Background()); !slices.Equal(got, want) {
+	c.Refresh(context.Background())
+	if got := names(c); !slices.Equal(got, want) {
 		t.Errorf("after a failed refresh: %v", got)
+	}
+	if s := c.States()["multi.chat"]; s.Fetched.IsZero() || !strings.Contains(s.Err, "HTTP 500") {
+		t.Errorf("after a failed refresh: %+v", s)
+	}
+	chat.fail.Store(false)
+	c.Refresh(context.Background())
+	if s := c.States()["multi.chat"]; s.Err != "" {
+		t.Errorf("after a successful refresh: %+v", s)
 	}
 }
 
@@ -162,7 +188,7 @@ routes:
 	defer cancel()
 	c.Start(ctx)
 	// Names called right after Start waits for the first fetch.
-	if got := c.Names(context.Background()); !slices.Equal(got, []string{"m-1"}) {
+	if got := names(c); !slices.Equal(got, []string{"m-1"}) {
 		t.Errorf("Names() = %v", got)
 	}
 }
@@ -184,7 +210,7 @@ routes:
 	if err := c.refresh(context.Background(), endpoint{"p", "chat"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Names(context.Background()); !slices.Equal(got, []string{"llama3"}) {
+	if got := names(c); !slices.Equal(got, []string{"llama3"}) {
 		t.Errorf("Names() = %q", got)
 	}
 }
@@ -219,7 +245,7 @@ routes:
 	if err := c.refresh(context.Background(), endpoint{"p", "chat"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Names(context.Background()); !slices.Equal(got, []string{"m-1", "m-2"}) {
+	if got := names(c); !slices.Equal(got, []string{"m-1", "m-2"}) {
 		t.Errorf("Names() = %v", got)
 	}
 	if got := asked.Load(); got != "gzip" {
@@ -278,7 +304,7 @@ routes:
 	c.Start(ctx)
 	await(10)
 	p.fail.Store(false)
-	for deadline := time.Now().Add(5 * time.Second); len(c.Names(context.Background())) == 0; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); len(names(c)) == 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the list was never fetched")
 		}
@@ -308,4 +334,13 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// names returns the listed names alone.
+func names(c *Cache) []string {
+	var out []string
+	for _, l := range c.Names(context.Background()) {
+		out = append(out, l.Name)
+	}
+	return out
 }

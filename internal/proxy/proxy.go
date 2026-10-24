@@ -175,6 +175,9 @@ func (h *Handler) SetPricing(t *pricing.Table) { h.pricing.Store(t) }
 // Pricing returns the price table new log rows are priced with.
 func (h *Handler) Pricing() *pricing.Table { return h.pricing.Load() }
 
+// Models returns the model lists of the configuration being served.
+func (h *Handler) Models() *models.Cache { return h.rt.Load().models }
+
 // Stats returns a snapshot of the gateway's in-memory state.
 func (h *Handler) Stats() Stats {
 	rt := h.rt.Load()
@@ -182,7 +185,7 @@ func (h *Handler) Stats() Stats {
 		Breakers:   rt.breakers.Snapshot(),
 		Pins:       h.pins.ByEndpoint(),
 		PinsTotal:  h.pins.Len(),
-		ModelsAge:  rt.models.Ages(),
+		Models:     rt.models.States(),
 		LogDropped: h.store.Dropped(),
 	}
 }
@@ -220,11 +223,11 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 	names := rt.models.Names(r.Context())
 	data := make([]model, 0, len(names))
 	for _, n := range names {
-		data = append(data, model{ID: n, Object: "model", OwnedBy: "verbatim", Type: "model", DisplayName: n, CreatedAt: "1970-01-01T00:00:00Z"})
+		data = append(data, model{ID: n.Name, Object: "model", OwnedBy: "verbatim", Type: "model", DisplayName: n.Name, CreatedAt: "1970-01-01T00:00:00Z"})
 	}
 	var first, last *string
 	if len(names) > 0 {
-		first, last = &names[0], &names[len(names)-1]
+		first, last = &names[0].Name, &names[len(names)-1].Name
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Object  string  `json:"object"`

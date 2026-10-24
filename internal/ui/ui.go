@@ -24,9 +24,11 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"verbatim/internal/config"
+	"verbatim/internal/models"
 	"verbatim/internal/pricing"
 	"verbatim/internal/protocol"
 	"verbatim/internal/proxy"
+	"verbatim/internal/route"
 	"verbatim/internal/store"
 )
 
@@ -48,6 +50,8 @@ type Options struct {
 	// exposes its redacted copy; when its server.api_key is set, /ui/api/*
 	// requires it as a bearer token.
 	Config func() *config.Config
+	// Models returns the model lists of the configuration being served.
+	Models func() *models.Cache
 	// Pricing returns the price table new requests are priced with.
 	Pricing func() *pricing.Table
 	// ReloadPricing loads the price table from pricing.cache and installs it.
@@ -61,6 +65,7 @@ type server struct {
 	store         *store.Store
 	stats         func() proxy.Stats
 	config        func() *config.Config
+	models        func() *models.Cache
 	pricing       func() *pricing.Table
 	reloadPricing func() (*pricing.Table, []string, error)
 	reloadConfig  func() ([]string, error)
@@ -84,6 +89,7 @@ func New(o Options) http.Handler {
 		store:         o.Store,
 		stats:         o.Stats,
 		config:        o.Config,
+		models:        o.Models,
 		pricing:       o.Pricing,
 		reloadPricing: o.ReloadPricing,
 		reloadConfig:  o.ReloadConfig,
@@ -96,6 +102,8 @@ func New(o Options) http.Handler {
 	api.HandleFunc("GET /ui/api/requests/{id}", s.request)
 	api.HandleFunc("GET /ui/api/usage", s.usage)
 	api.HandleFunc("GET /ui/api/providers", s.providers)
+	api.HandleFunc("GET /ui/api/models", s.modelsView)
+	api.HandleFunc("POST /ui/api/models/refresh", s.modelsRefresh)
 	api.HandleFunc("GET /ui/api/config", s.configView)
 	api.HandleFunc("POST /ui/api/config/reload", s.configReload)
 	api.HandleFunc("POST /ui/api/pricing/sync", s.pricingSync)
@@ -328,6 +336,7 @@ type EndpointView struct {
 	Breaker     BreakerView `json:"breaker"`
 	Pins        int         `json:"pins"`
 	ModelsAgeS  *int64      `json:"models_age_s"` // nil: the model list was never fetched
+	ModelsError string      `json:"models_error"` // the last model list fetch's error; "" when it succeeded
 	Committed   int64       `json:"committed"`
 	Failover    int64       `json:"failover"`
 	ErrorEvents int64       `json:"error_events"`
@@ -370,13 +379,126 @@ func (s *server) providers(w http.ResponseWriter, r *http.Request) {
 					ev.Breaker.OpenUntil = &b.OpenUntil
 				}
 			}
-			if age, ok := st.ModelsAge[ep]; ok {
-				ev.ModelsAgeS = new(int64(age / time.Second))
+			if m, ok := st.Models[ep]; ok {
+				if !m.Fetched.IsZero() {
+					ev.ModelsAgeS = new(int64(time.Since(m.Fetched) / time.Second))
+				}
+				ev.ModelsError = m.Err
 			}
 			v.Endpoints = append(v.Endpoints, ev)
 		}
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// ModelsView is the response of /ui/api/models and of POST
+// /ui/api/models/refresh: the names /v1/models lists, in its order.
+type ModelsView struct {
+	Models []ModelView `json:"models"`
+	// Unlisted are the pattern routes that list no name; they still route
+	// the requests that name a model they match.
+	Unlisted []string `json:"unlisted"`
+	// Failing are the endpoints whose last model list fetch failed.
+	Failing []FailingList `json:"failing"`
+}
+
+// ModelView is one listed name: per protocol whose model lists name it, in
+// protocolOrder, its route and that route's candidates for it, by ascending
+// priority. Routes are the protocols' routes, each once.
+type ModelView struct {
+	Name      string         `json:"name"`
+	Routes    []string       `json:"routes"`
+	Protocols []ProtocolView `json:"protocols"`
+}
+
+type ProtocolView struct {
+	Protocol string       `json:"protocol"`
+	Route    string       `json:"route"`
+	Targets  []TargetView `json:"targets"`
+}
+
+type TargetView struct {
+	Provider      string     `json:"provider"`
+	UpstreamModel string     `json:"upstream_model"`
+	Priority      int        `json:"priority"`
+	Price         *PriceView `json:"price"` // nil: unpriced
+}
+
+// PriceView is a target's price, USD per 1M tokens, as requests are priced.
+// The image prices apply to the image tokens of an images request.
+type PriceView struct {
+	Input       float64  `json:"input"`
+	Output      *float64 `json:"output"`
+	CacheRead   *float64 `json:"cache_read"`
+	ImageInput  *float64 `json:"image_input"`
+	ImageOutput *float64 `json:"image_output"`
+}
+
+type FailingList struct {
+	Endpoint string `json:"endpoint"`
+	Error    string `json:"error"`
+}
+
+func (s *server) modelsView(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.listModels(r.Context()))
+}
+
+// modelsRefresh fetches every model list now and answers with the listing
+// they give.
+func (s *server) modelsRefresh(w http.ResponseWriter, r *http.Request) {
+	s.models().Refresh(r.Context())
+	writeJSON(w, http.StatusOK, s.listModels(r.Context()))
+}
+
+// protocolOrder is the order a model's protocols are shown in.
+var protocolOrder = []protocol.ID{protocol.Chat, protocol.Responses, protocol.Anthropic, protocol.Images}
+
+func (s *server) listModels(ctx context.Context) ModelsView {
+	// The routes come from the cache's own configuration: a reload swaps
+	// both together.
+	mc, prices := s.models(), s.pricing()
+	cfg := mc.Config()
+	routes := route.New(cfg)
+	v := ModelsView{Models: []ModelView{}, Unlisted: []string{}, Failing: []FailingList{}}
+	listing := map[string]bool{} // routes that list a name
+	for _, l := range mc.Names(ctx) {
+		m := ModelView{Name: l.Name, Routes: []string{}, Protocols: []ProtocolView{}}
+		for _, proto := range protocolOrder {
+			i := slices.IndexFunc(l.Served, func(s models.Served) bool { return s.Protocol == proto })
+			if i < 0 {
+				continue
+			}
+			r := l.Served[i].Route
+			listing[r] = true
+			if !slices.Contains(m.Routes, r) {
+				m.Routes = append(m.Routes, r)
+			}
+			_, cands, _ := routes.Match(proto, l.Name)
+			slices.SortStableFunc(cands, func(a, b route.Candidate) int { return a.Priority - b.Priority })
+			pv := ProtocolView{Protocol: string(proto), Route: r, Targets: []TargetView{}}
+			for _, c := range cands {
+				t := TargetView{Provider: c.Provider, UpstreamModel: c.Model, Priority: c.Priority}
+				if _, p, ok := prices.Lookup(l.Name, c.Model); ok && prices.Prices(proto, l.Name, c.Model) {
+					t.Price = &PriceView{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, ImageInput: p.ImageInput, ImageOutput: p.ImageOutput}
+				}
+				pv.Targets = append(pv.Targets, t)
+			}
+			m.Protocols = append(m.Protocols, pv)
+		}
+		v.Models = append(v.Models, m)
+	}
+	for _, r := range cfg.Routes {
+		if !config.IsExact(r.Model) && !listing[r.Model] {
+			v.Unlisted = append(v.Unlisted, r.Model)
+		}
+	}
+	states := mc.States()
+	for _, name := range slices.Sorted(maps.Keys(states)) {
+		if e := states[name].Err; e != "" {
+			v.Failing = append(v.Failing, FailingList{Endpoint: name, Error: e})
+		}
+	}
+	return v
 }
 
 // configView returns the redacted configuration. The config structs carry

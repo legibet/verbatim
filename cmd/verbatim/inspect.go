@@ -414,6 +414,9 @@ func status(args []string) int {
 		if e.ModelsAgeS != nil {
 			age = (time.Duration(*e.ModelsAgeS) * time.Second).String()
 		}
+		if e.ModelsError != "" {
+			age = "failing"
+		}
 		lines = append(lines, []string{e.Provider, e.Protocol, e.Breaker.State, strconv.Itoa(e.Breaker.Failures), openUntil,
 			strconv.Itoa(e.Pins), age, count(e.Committed), count(e.Failover), count(e.ErrorEvents)})
 	}

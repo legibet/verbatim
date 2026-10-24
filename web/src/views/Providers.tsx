@@ -4,6 +4,7 @@ import { Dash, ErrorLine, Mark, SectionTitle } from "@/common"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { fmtAge, fmtClock, fmtInt } from "@/format"
 import { cn } from "@/lib/utils"
@@ -73,7 +74,7 @@ export function Providers() {
                   </TableCell>
                   <TableCell className="num text-right">{e.pins || <Dash />}</TableCell>
                   <TableCell className="num text-right">
-                    {e.models_age_s === null ? <span className="text-faint">never fetched</span> : fmtAge(e.models_age_s)}
+                    <ModelsAge e={e} />
                   </TableCell>
                   <TableCell className="num text-right">{e.committed ? fmtInt(e.committed) : <Dash />}</TableCell>
                   <TableCell className={cn("num text-right", e.failover > 0 && "text-warn-ink")}>
@@ -92,6 +93,26 @@ export function Providers() {
       <ConfigSection onReloaded={reload} />
     </div>
   )
+}
+
+// ModelsAge shows how old the endpoint's model list is, or that fetching it
+// fails, with the error on hover.
+function ModelsAge({ e }: { e: EndpointView }) {
+  if (e.models_error)
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" className="cursor-default outline-none focus-visible:underline">
+            <Mark tone="err">failing</Mark>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="max-w-[60ch] font-mono break-all">
+          {e.models_error}
+        </TooltipContent>
+      </Tooltip>
+    )
+  if (e.models_age_s === null) return <span className="text-faint">never fetched</span>
+  return fmtAge(e.models_age_s)
 }
 
 function Breaker({ b, now }: { b: EndpointView["breaker"]; now: number }) {

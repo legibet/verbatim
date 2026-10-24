@@ -52,7 +52,8 @@ func (e endpoint) name() string { return config.EndpointName(e.provider, e.proto
 
 type list struct {
 	ids     []string
-	fetched time.Time
+	fetched time.Time // zero: never fetched successfully
+	err     string    // the last fetch's error; "" when it succeeded
 }
 
 // New returns a cache for cfg. Only endpoints that a discovering pattern
@@ -147,18 +148,35 @@ func (c *Cache) keepFresh(ctx context.Context, e endpoint, warmed func()) {
 	}
 }
 
-// refresh fetches one endpoint's list and replaces the cached one.
+// Refresh fetches every list now and returns when all fetches have ended. It
+// does not log: the outcome is in States.
+func (c *Cache) Refresh(ctx context.Context) {
+	var wg sync.WaitGroup
+	for _, e := range c.endpoints {
+		wg.Go(func() { c.refresh(ctx, e) })
+	}
+	wg.Wait()
+}
+
+// refresh fetches one endpoint's list and replaces the cached one. A failed
+// fetch keeps the previous list and records the error, unless ctx was done.
 func (c *Cache) refresh(ctx context.Context, e endpoint) error {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	fctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	ids, err := c.fetch(ctx, e)
-	if err != nil {
+	ids, err := c.fetch(fctx, e)
+	if err != nil && ctx.Err() != nil {
 		return err
 	}
 	c.mu.Lock()
-	c.lists[e.name()] = list{ids: ids, fetched: time.Now()}
+	if err != nil {
+		l := c.lists[e.name()]
+		l.err = err.Error()
+		c.lists[e.name()] = l
+	} else {
+		c.lists[e.name()] = list{ids: ids, fetched: time.Now()}
+	}
 	c.mu.Unlock()
-	return nil
+	return err
 }
 
 // fetch reads the endpoint's model list, following the next-page cursor for
@@ -206,19 +224,33 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 	return all, nil
 }
 
+// Listed is a name in the listing and, per protocol it is listed for, in the
+// order first seen, the route that lists it.
+type Listed struct {
+	Name   string
+	Served []Served
+}
+
+// Served is a protocol a name is listed for and the route that serves it.
+type Served struct {
+	Protocol protocol.ID
+	Route    string
+}
+
 // Names assembles the listing (design 6.5): per route in configuration
 // order, an exact route contributes its own name, and a discovering pattern
 // route contributes the client names its targets' endpoints list: an id that
 // matches the pattern for a target without a model, or the pattern with its
 // '*' replaced by what the target model's '*' matched in the id. Targets with
 // a literal model contribute nothing. A name is kept only if routing would
-// send it to this route for that endpoint's protocol. The first occurrence of
-// a name wins.
+// send it to this route for that endpoint's protocol, so each protocol has
+// one route. A name is listed once, where it first occurs; an exact route
+// lists its name for the protocols routing sends it there for.
 //
 // A call made while Start's first round of fetches is still running waits
 // for it, or until ctx is done, so that a client asking right after startup
 // gets the full listing; models.timeout bounds that round.
-func (c *Cache) Names(ctx context.Context) []string {
+func (c *Cache) Names(ctx context.Context) []Listed {
 	c.mu.Lock()
 	warm := c.warm
 	c.mu.Unlock()
@@ -236,17 +268,32 @@ func (c *Cache) Names(ctx context.Context) []string {
 	}
 	c.mu.Unlock()
 
-	seen := map[string]bool{}
-	var out []string
-	add := func(name string) {
-		if !seen[name] {
-			seen[name] = true
-			out = append(out, name)
+	index := map[string]int{} // name -> position in out
+	var out []Listed
+	add := func(name, route string, proto protocol.ID) {
+		i, ok := index[name]
+		if !ok {
+			i = len(out)
+			index[name] = i
+			out = append(out, Listed{Name: name})
+		}
+		if !slices.ContainsFunc(out[i].Served, func(s Served) bool { return s.Protocol == proto }) {
+			out[i].Served = append(out[i].Served, Served{proto, route})
 		}
 	}
 	for _, r := range c.cfg.Routes {
 		if config.IsExact(r.Model) {
-			add(r.Model)
+			if _, ok := index[r.Model]; !ok {
+				index[r.Model] = len(out)
+				out = append(out, Listed{Name: r.Model})
+			}
+			for _, t := range r.Targets {
+				for _, proto := range c.cfg.Protocols(t) {
+					if owner, _, ok := c.routes.Match(protocol.ID(proto), r.Model); ok && owner == r.Model {
+						add(r.Model, r.Model, protocol.ID(proto))
+					}
+				}
+			}
 			continue
 		}
 		if !discovers(r) {
@@ -275,7 +322,7 @@ func (c *Cache) Names(ctx context.Context) []string {
 						continue
 					}
 					if owner, _, ok := c.routes.Match(protocol.ID(proto), name); ok && owner == r.Model {
-						add(name)
+						add(name, r.Model, protocol.ID(proto))
 					}
 				}
 			}
@@ -284,15 +331,23 @@ func (c *Cache) Names(ctx context.Context) []string {
 	return out
 }
 
-// Ages returns, per endpoint name, the age of its cached list. Endpoints
-// never fetched successfully have no entry.
-func (c *Cache) Ages() map[string]time.Duration {
+// State is an endpoint's cached list as of its last fetch.
+type State struct {
+	Fetched time.Time // when the cached list was fetched; zero: never
+	Err     string    // the last fetch's error; "" when it succeeded
+}
+
+// Config returns the configuration the cache was made for.
+func (c *Cache) Config() *config.Config { return c.cfg }
+
+// States returns, per endpoint name, the state of its list. Endpoints not
+// fetched yet have no entry.
+func (c *Cache) States() map[string]State {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now()
-	out := make(map[string]time.Duration, len(c.lists))
+	out := make(map[string]State, len(c.lists))
 	for name, l := range c.lists {
-		out[name] = now.Sub(l.fetched)
+		out[name] = State{Fetched: l.fetched, Err: l.err}
 	}
 	return out
 }

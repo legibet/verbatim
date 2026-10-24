@@ -121,7 +121,7 @@ verbatim status                          live endpoint state from the running se
 
 ## Web UI
 
-`http://<listen>/ui/`. It shows the request log and the server's live state (breakers, pins, model-list age). Its two actions are Sync prices on the Usage view, the same as `verbatim pricing sync`, and Reload config on the Providers view, the same as `SIGHUP`; neither changes the configuration file. If `server.api_key` is set, the UI asks for it once. Views: Requests (filters, live tail, detail drawer with the routing explanation, attempt timeline, raw usage, cost breakdown), Usage (totals, daily chart, breakdown by model / provider / route / day, unpriced models), Providers (live endpoint state and the served configuration).
+`http://<listen>/ui/`. It shows the request log and the server's live state (breakers, pins, model lists). Its actions are Sync prices, the same as `verbatim pricing sync`, and Fetch model lists on the Models view; and Reload config on the Providers view, the same as `SIGHUP`. None of them changes the configuration file. If `server.api_key` is set, the UI asks for it once. Views: Requests (filters, live tail, detail drawer with the routing explanation, attempt timeline, raw usage, cost breakdown), Usage (totals, daily chart, breakdown by model / provider / route / day, unpriced models), Models (the names `/v1/models` lists, with their routes, targets, and prices), Providers (live endpoint state and the served configuration).
 
 ## Pricing
 
