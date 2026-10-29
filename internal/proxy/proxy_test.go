@@ -634,6 +634,47 @@ func TestNonFailoverStatusReturnedUnchanged(t *testing.T) {
 	}
 }
 
+func TestProviderFailoverOn(t *testing.T) {
+	body := `{"code":"InvalidParameter","message":"Model not exist."}`
+	a := newUpstream(t, reply(400, body))
+	b := newUpstream(t, reply(200, `{"ok":"b"}`))
+	c := newUpstream(t, reply(400, `{"error":"c"}`))
+	g := newGateway(t, "providers:\n"+prov("a", "chat", a.URL, "failover_on: [400]")+prov("b", "chat", b.URL)+prov("c", "chat", c.URL)+`
+routes:
+  - model: m
+    targets:
+      - provider: a
+      - provider: b
+        priority: 2
+  - model: n
+    targets:
+      - provider: c
+      - provider: a
+        priority: 2
+breaker:
+  failure_threshold: 1
+`+noAffinity)
+
+	for range 2 {
+		res := g.post(t, "/v1/chat/completions", chatBody)
+		if res.status != 200 || res.body != `{"ok":"b"}` {
+			t.Fatalf("got %d %s", res.status, res.body)
+		}
+		if s := gjson.Get(g.row(t, res.rid).AttemptLog, "0.status").Int(); s != 400 {
+			t.Errorf("attempt_log[0].status = %d", s)
+		}
+	}
+	if a.count() != 2 || g.h.rt.Load().breakers.State("a.chat").State != "closed" {
+		t.Errorf("failover_on status fed the breaker: a got %d, state %+v", a.count(), g.h.rt.Load().breakers.State("a.chat"))
+	}
+
+	// Another provider's 400 is still returned unchanged.
+	res := g.post(t, "/v1/chat/completions", `{"model":"n","messages":[{"role":"user","content":"hi"}]}`)
+	if res.status != 400 || res.body != `{"error":"c"}` || a.count() != 2 {
+		t.Errorf("got %d %s, a got %d", res.status, res.body, a.count())
+	}
+}
+
 func TestExhaustion(t *testing.T) {
 	t.Run("last response returned unchanged", func(t *testing.T) {
 		a := newUpstream(t, reply(503, `A`))

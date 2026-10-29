@@ -17,7 +17,7 @@ The design document, `docs/design.md`, is the behavior contract.
 
 - Entry points: `POST /v1/chat/completions`, `POST /v1/responses` and Codex's web search `/v1/alpha/search`, `POST /v1/messages` and `/v1/messages/count_tokens`, `POST /v1/images/generations` and `/v1/images/edits` (JSON or multipart); `GET /v1/models` assembled from the configuration and the providers' own lists.
 - Routing: ordered routes with glob patterns; targets with priority tiers and weights, weighted or round-robin balancing; a tier is exhausted before the next one is tried.
-- Failover on connection failures and on 408/409/425/429/5xx/529 (and 401/403/404, with a warning), decided before anything is sent to the client. Everything else, including every 400, is returned unchanged.
+- Failover on connection failures and on 408/409/425/429/5xx/529 (and 401/403/404, with a warning), decided before anything is sent to the client. Everything else, including every 400, is returned unchanged, unless the provider lists that status in `failover_on`.
 - Circuit breaker per provider endpoint, with a single half-open probe.
 - Session affinity: the session key comes from request fields you name in the configuration (Claude Code's `metadata.user_id`, Codex's `session-id` header, ...), with a prefix hash as fallback; the pin is reserved before the first attempt so parallel first requests of a session land together. Responses `previous_response_id` is routed to the upstream that produced the id.
 - Per-provider static request overrides for service quirks (delete a field, set a literal).

@@ -500,6 +500,8 @@ func TestValidation(t *testing.T) {
 		{"key control", strings.Replace(provider(chat), "key: k", "key: \"k\\r\"", 1), "providers.p.key: contains a control character"},
 		{"api_key control", minimal + "server:\n  api_key: \"s\\x1b\"\n", "server.api_key: contains a control character"},
 		{"images overrides", provider(chat + "      images: {base_url: \"https://x/v1\"}\n    overrides:\n      - delete: quality\n"), "providers.p.overrides: not supported on a provider with an images endpoint"},
+		{"failover_on 2xx", provider(chat + "    failover_on: [400, 200]\n"), "providers.p.failover_on[1]: must be a 4xx or 5xx status, got 200"},
+		{"failover_on 600", provider(chat + "    failover_on: [600]\n"), "providers.p.failover_on[0]: must be a 4xx or 5xx status, got 600"},
 		// overrides
 		{"override neither", provider(chat + "    overrides:\n      - {}\n"), "providers.p.overrides[0]: must have exactly one of delete or set"},
 		{"override both", provider(chat + "    overrides:\n      - {delete: a, set: {path: b, value: 1}}\n"), "providers.p.overrides[0]: must have exactly one"},

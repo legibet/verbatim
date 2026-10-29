@@ -39,9 +39,12 @@ type Provider struct {
 	Key string `yaml:"key"`
 	// Headers are applied after client headers are copied and before auth.
 	// A nil value removes the header.
-	Headers   map[string]*string  `yaml:"headers"`
-	Overrides []Override          `yaml:"overrides"` // not allowed with an images endpoint
-	Endpoints map[string]Endpoint `yaml:"endpoints"` // keyed by protocol id
+	Headers   map[string]*string `yaml:"headers"`
+	Overrides []Override         `yaml:"overrides"` // not allowed with an images endpoint
+	// FailoverOn lists statuses that fail over from this provider in addition
+	// to the built-in ones (design 8.1). They never feed the breaker.
+	FailoverOn []int               `yaml:"failover_on"`
+	Endpoints  map[string]Endpoint `yaml:"endpoints"` // keyed by protocol id
 }
 
 // Endpoint is where a provider serves one protocol.

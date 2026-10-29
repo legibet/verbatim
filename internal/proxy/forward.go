@@ -347,7 +347,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			continue
 		}
 		a.Status = resp.StatusCode
-		if !failover(resp.StatusCode) {
+		if !failover(resp.StatusCode, x.rt.cfg.Providers[c.Provider].FailoverOn) {
 			a.MS = time.Since(sent).Milliseconds()
 			x.attempts = append(x.attempts, a)
 			if x.op.Auxiliary() {
@@ -394,19 +394,25 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 	}
 }
 
-// failover reports whether a status ends the attempt and moves on (design 8.1).
-func failover(status int) bool {
+// failover reports whether a status ends the attempt and moves on (design
+// 8.1): a built-in status, or one the provider lists in failover_on.
+func failover(status int, extra []int) bool {
 	switch status {
 	case 401, 403, 404, 408, 409, 425, 429, 500, 502, 503, 504, 529:
 		return true
 	}
-	return false
+	return slices.Contains(extra, status)
 }
 
 // counted reports whether a failover status says the provider as a whole is
-// unhealthy and so feeds the breaker (design 8.3).
+// unhealthy and so feeds the breaker (design 8.3). A status that fails over
+// only through failover_on is never counted.
 func counted(status int) bool {
-	return status == 429 || status == 529 || status >= 500
+	switch status {
+	case 429, 500, 502, 503, 504, 529:
+		return true
+	}
+	return false
 }
 
 // verdict reports a failed or verdict-less attempt to the breaker.

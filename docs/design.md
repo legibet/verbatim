@@ -231,6 +231,7 @@ A provider is one upstream service, such as a vendor's API or a relay. It has on
 | `key` | unless every endpoint has `auth: none` | Provider API key |
 | `headers` | no | Map of header name to string (set) or `null` (remove), applied after client headers are copied and before the endpoint's `auth` |
 | `overrides` | no | Ordered list of static request edits applied to every request the provider receives, section 9; not allowed on a provider with an `images` endpoint |
+| `failover_on` | no | List of 4xx or 5xx statuses that fail over from this provider in addition to the built-in ones, section 8.1 |
 | `endpoints` | yes | Map from protocol (`chat`, `responses`, `anthropic`, `images`) to the endpoint fields below; at least one |
 
 Endpoint fields:
@@ -360,6 +361,8 @@ Before anything is committed to the client, the following end the current attemp
 
 Every other status is returned to the client unchanged and ends the attempt loop. This includes all 400s (malformed request, Anthropic thinking signature errors, spend limits) and 402, 413, 422: retrying the same body elsewhere would either fail identically or hide the real error. The client owns its history and is the only party that can repair it.
 
+A provider's `failover_on` adds statuses that fail over from that provider, for every operation of every endpoint it has. It is for services that report a missing model with a status that also means a bad request: Alibaba Bailian answers a model it does not serve with 400, where other services use 404. Only the status is matched, never the error text, so every listed status from that provider fails over, a malformed request included; that request then fails at the remaining candidates and the last one's response is returned (section 8.4). A listed status is handled like a 404: it moves the pin in `prefer` mode and does not feed the breaker (section 8.3). The response itself is never changed.
+
 The body of an abandoned attempt is read (bounded by `server.idle_timeout` and 1 MiB) so that it can be returned to the client if this turns out to be the last attempt (section 8.4), and its first `log.error_excerpt_bytes` are kept in `attempt_log`.
 
 ### 8.2 Never failover
@@ -370,7 +373,7 @@ The body of an abandoned attempt is read (bounded by `server.idle_timeout` and 1
 
 ### 8.3 Circuit breaker
 
-Per provider endpoint (section 6.2). Only signals that indicate the endpoint as a whole is unhealthy feed the breaker: no response headers, 5xx, 529, 429. A 401, 403, or 404 permits failover for this request but does not count, because it is as likely to be about one model, one key entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`) as about the endpoint. `count_tokens` and `search` attempts never feed the breaker, whatever their status.
+Per provider endpoint (section 6.2). Only signals that indicate the endpoint as a whole is unhealthy feed the breaker: no response headers, and the built-in failover statuses 429, 500, 502, 503, 504, 529. A 401, 403, or 404, or a status that fails over only through `failover_on`, permits failover for this request but does not count, because it is as likely to be about one model, one key entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`) as about the endpoint. `count_tokens` and `search` attempts never feed the breaker, whatever their status.
 
 `breaker.failure_threshold` consecutive counted failures open the breaker for `breaker.cooldown`. While open, the endpoint is skipped at dispatch (section 6.4 step 4). After the cooldown exactly one request is admitted (half-open, admission is atomic); a committed response closes the breaker, a counted failure reopens it for another cooldown. Any committed response resets the consecutive counter.
 

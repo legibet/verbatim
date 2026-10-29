@@ -103,6 +103,15 @@ providers:
       chat: {base_url: https://relay.example/v1}
       responses: {base_url: https://relay.example/v1}
 
+  bailian:
+    key: ${DASHSCOPE_API_KEY}
+    failover_on: [400]              # statuses that also fail over from this provider,
+                                    # besides 401/403/404/408/409/425/429/500/502/503/
+                                    # 504/529. They do not feed the circuit breaker.
+    endpoints:
+      chat: {base_url: https://dashscope.aliyuncs.com/compatible-mode/v1}
+      anthropic: {base_url: https://dashscope.aliyuncs.com/apps/anthropic}
+
   local-llama:
     endpoints:
       chat: {base_url: http://127.0.0.1:8081/v1, auth: none}

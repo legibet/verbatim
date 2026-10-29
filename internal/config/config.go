@@ -429,6 +429,11 @@ func (c *checker) providers(cfg *Config) {
 		}
 		_, anthropic := p.Endpoints["anthropic"]
 		c.overrides(path, anthropic, p.Overrides)
+		for i, s := range p.FailoverOn {
+			if s < 400 || s > 599 {
+				c.errorf(fmt.Sprintf("%s.failover_on[%d]", path, i), "must be a 4xx or 5xx status, got %d", s)
+			}
+		}
 	}
 }
 
