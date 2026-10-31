@@ -23,7 +23,7 @@ The tee ([forwarding.md](forwarding.md#the-response)) keeps the last usage objec
 
 - `chat`: the last chunk with a non-null `usage` (it may have `choices: []` and precede `[DONE]`).
 - `responses`: the terminal event (`response.completed`, `response.incomplete`, or `response.failed`).
-- `anthropic`: `message_start` merged with `message_delta`; delta values are cumulative, so later ones replace earlier ones. `usage_json` is merged the same way, by top-level field, so a nested object such as `cache_creation` is replaced whole and a field no delta sends keeps its `message_start` value.
+- `anthropic`: `message_start` merged with `message_delta`; delta values are cumulative, so later ones replace earlier ones, and a field a delta omits or sends as null keeps its earlier value, as in the Anthropic SDK. `usage_json` is merged the same way, by top-level field, so a nested object such as `cache_creation` is replaced whole.
 - `images`: `image_generation.completed` or `image_edit.completed`.
 
 Normalization into the row:

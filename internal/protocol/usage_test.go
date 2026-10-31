@@ -280,6 +280,15 @@ func TestStreamUsage(t *testing.T) {
 			respID: "msg_01G",
 		},
 		{
+			name: "anthropic delta with null fields",
+			id:   Anthropic,
+			stream: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_null\",\"usage\":{\"input_tokens\":30,\"cache_read_input_tokens\":20,\"output_tokens\":1}}}\n\n" +
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":null,\"cache_read_input_tokens\":null,\"server_tool_use\":null,\"output_tokens\":9}}\n\n",
+			want:   "in=30 cr=20 cw=- cw1h=- out=9 rs=-",
+			raw:    `{"input_tokens":30,"cache_read_input_tokens":20,"output_tokens":9}`,
+			respID: "msg_null",
+		},
+		{
 			name:    "anthropic error event",
 			id:      Anthropic,
 			stream:  anthropicStreamError,

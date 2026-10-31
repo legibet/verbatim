@@ -69,10 +69,11 @@ func (anthropicProtocol) NewUsageParser(op Operation, stream bool) UsageParser {
 // observeAnthropic reads a message object or a stream event. A stream's usage
 // is message_start's message.usage merged with every message_delta usage.
 // Delta values are cumulative and replace earlier ones field by field; a
-// field a delta omits (older servers send only output_tokens) keeps its
-// earlier value. Usage.Raw is merged the same way, one top-level field at a
-// time, so a nested object such as cache_creation is replaced whole: the
-// result has the shape of a non-streamed message's usage.
+// field a delta omits or sends as null (older servers send only
+// output_tokens) keeps its earlier value, as in the Anthropic SDK. Usage.Raw
+// is merged the same way, one top-level field at a time, so a nested object
+// such as cache_creation is replaced whole: the result has the shape of a
+// non-streamed message's usage.
 func observeAnthropic(st *usageState, event string, obj gjson.Result) {
 	typ := obj.Get("type").Str
 	if typ == "" {
@@ -111,6 +112,9 @@ func mergeAnthropicUsage(st *usageState, u gjson.Result) {
 		st.usage.Raw = []byte(u.Raw)
 	} else {
 		u.ForEach(func(k, v gjson.Result) bool {
+			if v.Type == gjson.Null {
+				return true
+			}
 			if raw, err := sjson.SetRawBytes(st.usage.Raw, gjson.Escape(k.Str), []byte(v.Raw)); err == nil {
 				st.usage.Raw = raw
 			}
