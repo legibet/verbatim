@@ -100,7 +100,8 @@ func (imagesProtocol) NewUsageParser(op Operation, stream bool) UsageParser {
 // imagesUsage normalizes an Images API usage object, which reports no cache
 // tokens. When the input details are missing, a generations request, which
 // takes only a text prompt, has no image input, and an edit's input is all
-// taken as image input: its images outweigh its prompt (design 12.3).
+// taken as image input: its images outweigh its prompt
+// (docs/usage-and-pricing.md).
 func imagesUsage(u gjson.Result, op Operation) Usage {
 	r := Usage{
 		Input:       num(u.Get("input_tokens")),

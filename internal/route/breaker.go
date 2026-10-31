@@ -6,7 +6,7 @@ import (
 )
 
 // Breakers holds one circuit breaker per provider endpoint, keyed by
-// config.EndpointName (design 8.3). It is safe for concurrent use.
+// config.EndpointName (docs/routing.md). It is safe for concurrent use.
 type Breakers struct {
 	threshold int
 	cooldown  time.Duration

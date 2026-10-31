@@ -77,7 +77,7 @@ func New(cfg *config.Config) *Table {
 }
 
 // Match finds the first route whose pattern matches clientModel and that has
-// at least one target that serves proto (design 6.3). The
+// at least one target that serves proto (docs/routing.md). The
 // candidates are that route's targets filtered to proto, in configuration
 // order, with Model resolved by upstream.
 func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cands []Candidate, ok bool) {
@@ -102,9 +102,9 @@ func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cand
 	return "", nil, false
 }
 
-// upstream resolves a target's model for clientModel (design 6.3): an absent
-// model forwards clientModel, a literal is sent as is, and a '*' is replaced
-// with the text the route pattern's '*' matched.
+// upstream resolves a target's model for clientModel (docs/routing.md): an
+// absent model forwards clientModel, a literal is sent as is, and a '*' is
+// replaced with the text the route pattern's '*' matched.
 func (r tableRoute) upstream(model, clientModel string) string {
 	if model == "" {
 		return clientModel
@@ -117,7 +117,7 @@ func (r tableRoute) upstream(model, clientModel string) string {
 	return before + s + after
 }
 
-// Order builds the attempt order (design 6.4 step 2): tiers by ascending
+// Order builds the attempt order (docs/routing.md): tiers by ascending
 // priority; within a tier, weighted draws without replacement with
 // probability proportional to weight, and round_robin rotates the tier from
 // a counter kept per (route, protocol, tier). cands is not modified.
@@ -171,8 +171,8 @@ func (t *Table) weighted(tier []Candidate) []Candidate {
 	return out
 }
 
-// Front moves pinned to the front of cands if it is among them (design 6.4
-// step 3). It returns cands unchanged otherwise.
+// Front moves pinned to the front of cands if it is among them
+// (docs/routing.md). It returns cands unchanged otherwise.
 func Front(cands []Candidate, pinned TargetID) []Candidate {
 	i := slices.IndexFunc(cands, func(c Candidate) bool { return c.TargetID == pinned })
 	if i <= 0 {

@@ -52,7 +52,7 @@ func observeChat(st *usageState, _ string, obj gjson.Result) {
 // openAIUsage normalizes a Chat Completions usage object (in "prompt", out
 // "completion") or a Responses one (in "input", out "output"). The prompt
 // count includes cached and cache-written tokens, which are subtracted when
-// the details object reports them (design 11.3).
+// the details object reports them (docs/usage-and-pricing.md).
 func openAIUsage(u gjson.Result, in, out string) Usage {
 	r := Usage{
 		Output:    num(u.Get(out + "_tokens")),

@@ -644,7 +644,8 @@ func (c *checker) routes(cfg *Config) {
 	}
 
 	// An exact-name route is unreachable when earlier pattern routes matching
-	// its name already serve every protocol it has targets for (design 6.3).
+	// its name already serve every protocol it has targets for
+	// (docs/routing.md).
 	for i, r := range cfg.Routes {
 		if !IsExact(r.Model) {
 			continue

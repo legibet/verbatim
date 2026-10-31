@@ -42,7 +42,7 @@ type Provider struct {
 	Headers   map[string]*string `yaml:"headers"`
 	Overrides []Override         `yaml:"overrides"` // not allowed with an images endpoint
 	// FailoverOn lists statuses that fail over from this provider in addition
-	// to the built-in ones (design 8.1). They never feed the breaker.
+	// to the built-in ones (docs/routing.md). They never feed the breaker.
 	FailoverOn []int               `yaml:"failover_on"`
 	Endpoints  map[string]Endpoint `yaml:"endpoints"` // keyed by protocol id
 }

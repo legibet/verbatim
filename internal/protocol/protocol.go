@@ -14,7 +14,7 @@ const (
 	Images    ID = "images"
 )
 
-// Operation is what a request asks of the upstream (design 4).
+// Operation is what a request asks of the upstream (docs/forwarding.md).
 type Operation string
 
 const (
@@ -30,8 +30,9 @@ const (
 // one, never feed the breaker, and are neither priced nor aggregated as usage.
 func (op Operation) Auxiliary() bool { return op == CountTokens || op == Search }
 
-// Usage is the normalized token accounting of one response (design 11.3).
-// A nil field means the provider did not report it; nothing is estimated.
+// Usage is the normalized token accounting of one response
+// (docs/usage-and-pricing.md). A nil field means the provider did not report
+// it; nothing is estimated.
 type Usage struct {
 	Input        *int64 // uncached input tokens
 	CacheRead    *int64
@@ -87,13 +88,15 @@ type Protocol interface {
 	// did not send them (anthropic-version only).
 	DefaultHeaders(h http.Header)
 	// PrefixForHash returns the exact bytes of the system field and the first
-	// user-role message (design 7.1); ok is false when there is no user message.
+	// user-role message (docs/affinity.md); ok is false when there is no user
+	// message.
 	PrefixForHash(body []byte) (prefix []byte, ok bool)
 	// ContinuationRef returns a server-side state reference the request
 	// continues from (Responses previous_response_id or conversation).
 	ContinuationRef(body []byte) (id string, ok bool)
 	NewUsageParser(op Operation, stream bool) UsageParser
-	// ErrorBody renders a verbatim-generated error in the native shape (design 10).
+	// ErrorBody renders a verbatim-generated error in the native shape
+	// (docs/forwarding.md).
 	ErrorBody(status int, code, msg string) []byte
 	// ModelList parses one page of the model list. next is the cursor for
 	// the following page, empty on the last one.

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// fullExample is the configuration from design section 6.1, unchanged.
+// fullExample is a configuration that uses every section.
 const fullExample = `
 server:
   listen: 127.0.0.1:8080

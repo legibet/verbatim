@@ -39,9 +39,9 @@ func (bodyModel) Stream(body []byte, _ string) bool {
 	return gjson.GetBytes(body, "stream").Type == gjson.True
 }
 
-// hashPrefix lays out the affinity hash input of design 7.1: the protocol id,
-// the system field, and the first user message, as the exact bytes the client
-// sent, separated by NUL bytes.
+// hashPrefix lays out the affinity hash input described in docs/affinity.md:
+// the protocol id, the system field, and the first user message, as the exact
+// bytes the client sent, separated by NUL bytes.
 func hashPrefix(id ID, system, user gjson.Result) ([]byte, bool) {
 	if !user.Exists() {
 		return nil, false

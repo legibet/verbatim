@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Request is one row of the requests table (design 11.2). Nullable columns
-// are pointers; nil is NULL.
+// Request is one row of the requests table (docs/usage-and-pricing.md).
+// Nullable columns are pointers; nil is NULL.
 type Request struct {
 	ID                 int64     `json:"id"` // assigned by the database; ignored by Record
 	TS                 time.Time `json:"ts"` // request start, stored as unix milliseconds

@@ -1,5 +1,5 @@
 // Package models keeps the provider endpoints' own model lists and assembles
-// the model listing served at /v1/models (design 6.5).
+// the model listing served at /v1/models (docs/routing.md).
 package models
 
 import (
@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	// maxPages bounds the pages read of one model list (design 6.5).
+	// maxPages bounds the pages read of one model list (docs/routing.md).
 	maxPages = 10
 	// maxListBytes bounds one page of an endpoint's model list.
 	maxListBytes = 16 << 20
@@ -237,7 +237,7 @@ type Served struct {
 	Route    string
 }
 
-// Names assembles the listing (design 6.5): per route in configuration
+// Names assembles the listing (docs/routing.md): per route in configuration
 // order, an exact route contributes its own name, and a discovering pattern
 // route contributes the client names its targets' endpoints list: an id that
 // matches the pattern for a target without a model, or the pattern with its
@@ -353,7 +353,7 @@ func (c *Cache) States() map[string]State {
 }
 
 // Authorize applies a provider's configured headers and then the
-// endpoint's authentication header to h (design 4.2 step 4). A nil header
+// endpoint's authentication header to h (docs/forwarding.md). A nil header
 // value removes the header; the authentication header always wins. Headers
 // are applied in sorted order so that two names differing only in case
 // resolve the same way every time.

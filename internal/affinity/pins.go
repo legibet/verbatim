@@ -10,8 +10,8 @@ import (
 	"verbatim/internal/route"
 )
 
-// PinKey identifies a pin (design 7.2): the same session key under another
-// protocol or for another client model is an independent pin.
+// PinKey identifies a pin (docs/affinity.md): the same session key under
+// another protocol or for another client model is an independent pin.
 type PinKey struct {
 	Protocol protocol.ID
 	Key      string // from Rules.Key
@@ -108,7 +108,7 @@ func (p *Pins) Reserve(k PinKey, t route.TargetID) (pinned route.TargetID, reser
 
 // Commit records that a response from t was committed under k: the pin
 // moves to t if it pointed elsewhere, is created again if it has expired
-// meanwhile, and from now on survives Release (design 7.2).
+// meanwhile, and from now on survives Release (docs/affinity.md).
 func (p *Pins) Commit(k PinKey, t route.TargetID) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -1,5 +1,5 @@
 // Package affinity derives session keys from requests and keeps the
-// in-memory pins that send one session to one target (design 7).
+// in-memory pins that send one session to one target (docs/affinity.md).
 package affinity
 
 import (
@@ -26,9 +26,9 @@ func NewRules(cfg config.Affinity) *Rules {
 	return &Rules{rules: slices.Clone(cfg.Rules), fallback: cfg.Fallback}
 }
 
-// Key derives the affinity key for a request (design 7.1). The first rule
-// whose match fits is used, and its first source yielding a non-empty value
-// is the key; a body source takes a string or number exactly as sent, a
+// Key derives the affinity key for a request (docs/affinity.md). The first
+// rule whose match fits is used, and its first source yielding a non-empty
+// value is the key; a body source takes a string or number exactly as sent, a
 // header source the header's first value. Otherwise the fallback applies:
 // prefix_hash hashes the protocol id and p.PrefixForHash(body), none yields
 // no key.

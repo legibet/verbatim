@@ -1,6 +1,6 @@
 // Package store keeps the SQLite log of requests and the Responses ownership
-// table (design 11.1, 11.2, 7.4), and answers the queries behind the CLI and
-// the web UI.
+// table (docs/usage-and-pricing.md, docs/affinity.md), and answers the
+// queries behind the CLI and the web UI.
 package store
 
 import (
@@ -272,9 +272,9 @@ func (s *Store) sweep(cutoff time.Time) {
 	}
 }
 
-// RecordOwner records which target produced a response id (design 7.4). It
-// writes synchronously: the client's next turn may arrive milliseconds after
-// the response completes.
+// RecordOwner records which target produced a response id (docs/affinity.md).
+// It writes synchronously: the client's next turn may arrive milliseconds
+// after the response completes.
 func (s *Store) RecordOwner(id, provider, upstreamModel string) error {
 	_, err := s.w.Exec(`INSERT INTO owned_responses (id, provider, upstream_model, ts) VALUES (?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, upstream_model = excluded.upstream_model, ts = excluded.ts`,

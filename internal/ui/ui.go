@@ -1,5 +1,5 @@
-// Package ui serves the web UI (design 14): the embedded static assets under
-// /ui/ and the JSON API under /ui/api/.
+// Package ui serves the web UI (docs/web-ui.md): the embedded static assets
+// under /ui/ and the JSON API under /ui/api/.
 package ui
 
 import (

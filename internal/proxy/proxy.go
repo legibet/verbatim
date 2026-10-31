@@ -1,7 +1,7 @@
-// Package proxy is the data plane: it serves the protocol entry points,
-// runs the attempt loop with failover, circuit breaking, session affinity
-// and response ownership, streams the committed response back unchanged,
-// and records one log row per request (design 4, 5, 7, 8, 9, 10, 11).
+// Package proxy is the data plane: it serves the protocol entry points, runs
+// the attempt loop with failover, circuit breaking, session affinity and
+// response ownership, streams the committed response back unchanged, and
+// records one log row per request. The behavior is specified in docs/.
 package proxy
 
 import (
@@ -82,7 +82,7 @@ func New(o Options) *Handler {
 	})
 	h.mux.HandleFunc("GET /v1/models", h.listModels)
 	// Responses resource operations and the WebSocket transport (a GET on
-	// /v1/responses) are not supported in version 1 (design 4.4).
+	// /v1/responses) are not supported (docs/forwarding.md).
 	for _, pattern := range []string{
 		"GET /v1/responses",
 		"GET /v1/responses/{id}",
@@ -190,8 +190,8 @@ func (h *Handler) Stats() Stats {
 	}
 }
 
-// authorized checks the client key (design 4.1): either carrier matching is
-// enough.
+// authorized checks the client key (docs/forwarding.md): either carrier
+// matching is enough.
 func (rt *runtime) authorized(r *http.Request) bool {
 	key := []byte(rt.cfg.Server.APIKey)
 	if len(key) == 0 {
@@ -204,7 +204,7 @@ func (rt *runtime) authorized(r *http.Request) bool {
 	return match(r.Header.Get("X-Api-Key"))
 }
 
-// listModels serves the OpenAI/Anthropic superset listing (design 6.5).
+// listModels serves the OpenAI/Anthropic superset listing (docs/routing.md).
 func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 	rt := h.rt.Load()
 	if !rt.authorized(r) {
@@ -239,7 +239,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeError writes a verbatim-generated error in the protocol's native
-// shape, marked with x-verbatim-error (design 10).
+// shape, marked with x-verbatim-error (docs/forwarding.md).
 func writeError(w http.ResponseWriter, p protocol.Protocol, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Verbatim-Error", code)

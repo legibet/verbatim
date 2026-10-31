@@ -1,6 +1,5 @@
 // Command verbatim is a small, self-hosted LLM API gateway. See
-// docs/design.md for the behavior; this file dispatches the CLI commands of
-// design section 13.
+// docs/architecture.md for the design; this file dispatches the CLI commands.
 package main
 
 import (

@@ -1,7 +1,7 @@
-// Package pricing puts a list-price cost on logged usage (design 12). Prices
-// come from llm-metadata / models.dev provider files mirrored into a local
-// cache by Sync, merged with a local overrides file, and are looked up by
-// exact model name only.
+// Package pricing puts a list-price cost on logged usage
+// (docs/usage-and-pricing.md). Prices come from llm-metadata / models.dev
+// provider files mirrored into a local cache by Sync, merged with a local
+// overrides file, and are looked up by exact model name only.
 package pricing
 
 import (
@@ -231,9 +231,9 @@ func newPrice(id, source string, c costJSON, multiple *float64) (Price, string) 
 	return p, ""
 }
 
-// Lookup finds the price for a request (design 12.2): the client model name,
-// then its alias, then the upstream model name, then its alias. key is the
-// table entry used.
+// Lookup finds the price for a request (docs/usage-and-pricing.md): the
+// client model name, then its alias, then the upstream model name, then its
+// alias. key is the table entry used.
 func (t *Table) Lookup(clientModel, upstreamModel string) (key string, p Price, ok bool) {
 	for _, name := range []string{clientModel, upstreamModel} {
 		if name == "" {
@@ -277,13 +277,13 @@ type unitPrices struct {
 	ImageOutput  *float64 `json:"image_output,omitempty"` // image models only
 }
 
-// Cost computes the USD cost of a response (design 12.3). Image tokens are
-// priced at the image prices, the rest of input and output at the text
-// prices. ok is false when the usage is incomplete (input or output tokens
-// missing, or an image model's image tokens not reported) or has tokens the
-// model has no price for, such as cache reads without a cache read price or
-// image tokens without an image price: nothing is estimated. priceJSON
-// records the per-1M-token unit prices used.
+// Cost computes the USD cost of a response (docs/usage-and-pricing.md). Image
+// tokens are priced at the image prices, the rest of input and output at the
+// text prices. ok is false when the usage is incomplete (input or output
+// tokens missing, or an image model's image tokens not reported) or has
+// tokens the model has no price for, such as cache reads without a cache read
+// price or image tokens without an image price: nothing is estimated.
+// priceJSON records the per-1M-token unit prices used.
 func Cost(u protocol.Usage, p Price) (usd float64, priceJSON []byte, ok bool) {
 	if u.Input == nil || u.Output == nil {
 		return 0, nil, false

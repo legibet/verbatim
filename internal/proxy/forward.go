@@ -28,14 +28,14 @@ import (
 )
 
 const (
-	// maxErrorBody bounds the body kept from a failed attempt (design 8.1).
+	// maxErrorBody bounds the body kept from a failed attempt (docs/routing.md).
 	maxErrorBody = 1 << 20
 	// statusClientClosed is logged when the client went away before any
 	// response was written to it (the nginx convention); nothing is sent.
 	statusClientClosed = 499
 )
 
-// Log row outcomes (design 11.2).
+// Log row outcomes (docs/usage-and-pricing.md).
 const (
 	outcomeCompleted       = "completed"
 	outcomeErrorEvent      = "upstream_error_event"
@@ -158,7 +158,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, id string, p p
 	x.record()
 	if x.abort {
 		// Abort rather than close cleanly, so the client's SDK sees an error
-		// instead of a truncated success (design 4.3).
+		// instead of a truncated success (docs/forwarding.md).
 		panic(http.ErrAbortHandler)
 	}
 }
@@ -210,8 +210,9 @@ func (x *exchange) run() {
 	x.attemptAll(body, order)
 }
 
-// order resolves ownership and affinity into the attempt order (design 6.4,
-// 7). It reports false after answering the client itself.
+// order resolves ownership and affinity into the attempt order
+// (docs/routing.md, docs/affinity.md). It reports false after answering the
+// client itself.
 func (x *exchange) order(body []byte, model, routeName string, cands []route.Candidate) ([]route.Candidate, bool) {
 	h := x.h
 	key, source, hasKey := x.rt.rules.Key(x.proto, model, x.r.Header, body)
@@ -254,11 +255,12 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 	}
 	x.pin.key = affinity.PinKey{Protocol: x.proto.ID(), Key: key, Model: model}
 	if x.op.Auxiliary() {
-		// count_tokens and search follow a pin but never create one (design 7.3).
+		// count_tokens and search follow a pin but never create one
+		// (docs/affinity.md).
 		x.pin.target, x.pin.has = h.pins.Get(x.pin.key)
 	} else {
 		// Reserving before the first attempt makes concurrent first requests
-		// of a session agree on one target (design 7.2).
+		// of a session agree on one target (docs/affinity.md).
 		x.pin.target, x.pin.reserved = h.pins.Reserve(x.pin.key, order[0].TargetID)
 		x.pin.has = true
 	}
@@ -283,7 +285,7 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 }
 
 // failedResponse is the buffered response of a failed attempt, kept in case
-// it turns out to be the last one (design 8.4).
+// it turns out to be the last one (docs/routing.md).
 type failedResponse struct {
 	status   int
 	header   http.Header
@@ -292,9 +294,9 @@ type failedResponse struct {
 	complete bool // the whole body was read
 }
 
-// attemptAll runs the attempt loop (design 5, 6.4, 8): each candidate once,
-// the breaker checked at dispatch, failover decided on the status line, and
-// the first other response committed.
+// attemptAll runs the attempt loop (docs/architecture.md, docs/routing.md):
+// each candidate once, the breaker checked at dispatch, failover decided on
+// the status line, and the first other response committed.
 func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 	h := x.h
 	var last *failedResponse // response of the last attempt, nil if it had none
@@ -381,7 +383,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		}
 	}
 
-	// Exhaustion (design 8.4).
+	// Exhaustion (docs/routing.md).
 	x.releasePin()
 	x.w.Header().Set("X-Verbatim-Attempts", strconv.Itoa(len(x.attempts)))
 	switch {
@@ -394,8 +396,9 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 	}
 }
 
-// failover reports whether a status ends the attempt and moves on (design
-// 8.1): a built-in status, or one the provider lists in failover_on.
+// failover reports whether a status ends the attempt and moves on
+// (docs/routing.md): a built-in status, or one the provider lists in
+// failover_on.
 func failover(status int, extra []int) bool {
 	switch status {
 	case 401, 403, 404, 408, 409, 425, 429, 500, 502, 503, 504, 529:
@@ -405,8 +408,8 @@ func failover(status int, extra []int) bool {
 }
 
 // counted reports whether a failover status says the provider as a whole is
-// unhealthy and so feeds the breaker (design 8.3). A status that fails over
-// only through failover_on is never counted.
+// unhealthy and so feeds the breaker (docs/routing.md). A status that fails
+// over only through failover_on is never counted.
 func counted(status int) bool {
 	switch status {
 	case 429, 500, 502, 503, 504, 529:
@@ -434,7 +437,7 @@ func (x *exchange) setTarget(t route.TargetID) {
 
 // commitPin records the committed target on the session's pin, moving the
 // pin there if it pointed elsewhere; a pin that has served a committed
-// response is never released (design 7.2, 7.3).
+// response is never released (docs/affinity.md).
 func (x *exchange) commitPin(t route.TargetID) {
 	if x.op.Auxiliary() || !x.pin.has {
 		return
@@ -453,7 +456,7 @@ func (x *exchange) releasePin() {
 }
 
 // build makes the attempt's upstream request from the original client
-// request (design 4.2): model name, overrides, URL, and headers.
+// request (docs/forwarding.md): model name, overrides, URL, and headers.
 func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) {
 	p := x.rt.cfg.Providers[c.Provider]
 	e := p.Endpoints[string(x.proto.ID())]
@@ -484,8 +487,9 @@ func (x *exchange) build(body []byte, c route.Candidate) (*http.Request, error) 
 	return req, nil
 }
 
-// applyOverrides runs a provider's static edits in order (design 9). sjson
-// returns a new slice, so the caller's body is never modified.
+// applyOverrides runs a provider's static edits in order
+// (docs/forwarding.md). sjson returns a new slice, so the caller's body is
+// never modified.
 func applyOverrides(body []byte, ops []config.Override) ([]byte, error) {
 	for i, o := range ops {
 		var err error
@@ -545,7 +549,7 @@ func (x *exchange) drain(resp *http.Response) *failedResponse {
 }
 
 // writeHead commits status and headers to the client: the point after which
-// nothing is retried (design 4.3).
+// nothing is retried (docs/forwarding.md).
 func (x *exchange) writeHead(status int, header, trailer http.Header) {
 	h := x.w.Header()
 	copyEndToEnd(h, header)
@@ -578,7 +582,7 @@ func upstreamRequestID(h http.Header) *string {
 }
 
 // returnLast returns the last failed attempt's response unchanged, apart from
-// x-verbatim-attempts (design 8.4).
+// x-verbatim-attempts (docs/routing.md).
 func (x *exchange) returnLast(last *failedResponse) {
 	x.writeHead(last.status, last.header, last.trailer)
 	x.row.Error = new(excerpt(last.body, last.header, x.rt.cfg.Log.ErrorExcerptBytes))
@@ -595,8 +599,8 @@ func (x *exchange) returnLast(last *failedResponse) {
 }
 
 // commit forwards the committed response: status and headers, then the body
-// with a flush after every write, observed by the usage tee (design 4.3,
-// 11.3).
+// with a flush after every write, observed by the usage tee
+// (docs/forwarding.md, docs/usage-and-pricing.md).
 func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 	defer resp.Body.Close()
 	h := x.h
@@ -682,7 +686,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 }
 
 // setUsage fills the token columns and, unless the operation is auxiliary,
-// the cost (design 11.3, 12).
+// the cost (docs/usage-and-pricing.md).
 func (x *exchange) setUsage(tee *usageTee, c route.Candidate) {
 	u, ok := tee.usage()
 	if !ok {
@@ -711,7 +715,7 @@ func (x *exchange) setUsage(tee *usageTee, c route.Candidate) {
 	}
 }
 
-// fail answers with a verbatim-generated error (design 10).
+// fail answers with a verbatim-generated error (docs/forwarding.md).
 func (x *exchange) fail(status int, code, msg string) {
 	writeError(x.w, x.proto, status, code, msg)
 	x.committed = true

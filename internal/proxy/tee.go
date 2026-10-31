@@ -19,7 +19,7 @@ import (
 // usageTee feeds a copy of the committed body to the protocol's usage
 // parser. A parser panic drops the parser and never reaches the request.
 //
-// A compressed body is decompressed for the parser only (design 4.3).
+// A compressed body is decompressed for the parser only (docs/forwarding.md).
 // The decompressors pull from a reader while the tee is pushed to, so
 // a decoder goroutine runs the decompressor and hands its output back; the
 // parser is only ever called from the caller's goroutine. write returns once

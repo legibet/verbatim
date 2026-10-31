@@ -346,7 +346,8 @@ func compressor(t *testing.T, encoding string, w io.Writer) interface {
 }
 
 // The client gets an encoded body unchanged; the tee decodes its own copy of
-// gzip, deflate, br and zstd, and inspects no other encoding (design 4.3).
+// gzip, deflate, br and zstd, and inspects no other encoding
+// (docs/forwarding.md).
 func TestCompressedBodyUsage(t *testing.T) {
 	const body = `{"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`
 	compressed := func(encoding string) []byte {
