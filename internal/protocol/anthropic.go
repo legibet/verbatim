@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // anthropicVersion is sent when the client did not choose one; the Anthropic
@@ -69,7 +70,9 @@ func (anthropicProtocol) NewUsageParser(op Operation, stream bool) UsageParser {
 // is message_start's message.usage merged with every message_delta usage.
 // Delta values are cumulative and replace earlier ones field by field; a
 // field a delta omits (older servers send only output_tokens) keeps its
-// earlier value. Usage.Raw is the last usage object received, not the merge.
+// earlier value. Usage.Raw is merged the same way, one top-level field at a
+// time, so a nested object such as cache_creation is replaced whole: the
+// result has the shape of a non-streamed message's usage.
 func observeAnthropic(st *usageState, event string, obj gjson.Result) {
 	typ := obj.Get("type").Str
 	if typ == "" {
@@ -104,7 +107,16 @@ func mergeAnthropicUsage(st *usageState, u gjson.Result) {
 	replace(&st.usage.CacheWrite, "cache_creation_input_tokens")
 	replace(&st.usage.CacheWrite1h, "cache_creation.ephemeral_1h_input_tokens")
 	replace(&st.usage.Output, "output_tokens")
-	st.usage.Raw = []byte(u.Raw)
+	if st.usage.Raw == nil {
+		st.usage.Raw = []byte(u.Raw)
+	} else {
+		u.ForEach(func(k, v gjson.Result) bool {
+			if raw, err := sjson.SetRawBytes(st.usage.Raw, gjson.Escape(k.Str), []byte(v.Raw)); err == nil {
+				st.usage.Raw = raw
+			}
+			return true
+		})
+	}
 	st.ok = true
 }
 

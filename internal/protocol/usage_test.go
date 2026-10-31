@@ -260,7 +260,7 @@ func TestStreamUsage(t *testing.T) {
 			id:     Anthropic,
 			stream: anthropicStream,
 			want:   "in=12 cr=40960 cw=2048 cw1h=2048 out=356 rs=-",
-			raw:    `{"input_tokens":12,"cache_creation_input_tokens":2048,"cache_read_input_tokens":40960,"output_tokens":356}`,
+			raw:    `{"input_tokens":12,"cache_creation_input_tokens":2048,"cache_read_input_tokens":40960,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2048},"output_tokens":356,"service_tier":"standard"}`,
 			respID: "msg_01XFDUDYJgAACzvnptvVoYEL",
 		},
 		{
@@ -268,7 +268,7 @@ func TestStreamUsage(t *testing.T) {
 			id:     Anthropic,
 			stream: anthropicStreamOld,
 			want:   "in=25 cr=- cw=- cw1h=- out=15 rs=-",
-			raw:    `{"output_tokens": 15}`,
+			raw:    `{"input_tokens": 25, "output_tokens": 15}`,
 			respID: "msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY",
 		},
 		{
@@ -276,6 +276,7 @@ func TestStreamUsage(t *testing.T) {
 			id:     Anthropic,
 			stream: anthropicStreamServerTool,
 			want:   "in=10682 cr=0 cw=0 cw1h=- out=510 rs=-",
+			raw:    `{"input_tokens":10682,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":510,"server_tool_use":{"web_search_requests":1}}`,
 			respID: "msg_01G",
 		},
 		{

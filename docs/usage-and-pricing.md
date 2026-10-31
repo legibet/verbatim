@@ -12,7 +12,7 @@ A row records, beyond the obvious request fields:
 - **Where it went**: `provider` and `upstream_model` of the committed target, or of the last attempted one; skipped targets never appear there.
 - **What the client got**: `status` (499 when the client left before anything was sent) and `outcome`: `completed`, `upstream_error_event` (error event in a `200` stream), `truncated` (stream cut), `client_cancelled`, or `gateway_error`.
 - **Timing**: `attempts_ms` spent in failed attempts, `ttfb_ms` to the committed headers (including `attempts_ms`), `total_ms` to the last byte.
-- **Usage**: normalized token columns plus the last usage object received, unmodified, in `usage_json`. For an Anthropic stream that is usually the final `message_delta`, so the columns can hold counts from `message_start` that `usage_json` lacks.
+- **Usage**: normalized token columns plus the upstream's usage object in `usage_json`: the last one received, unmodified, except for an Anthropic stream, where it is the merge described below, shaped like a non-streamed message's `usage`.
 - **Cost**: `cost_usd`, plus `price_key` and the unit prices used (`price_json`), so history stays stable when the price table changes. `price_key` is set whenever lookup finds an entry, even when that entry cannot price the request and `cost_usd` stays null.
 
 `count_tokens` rows carry `input_tokens`. `count_tokens` and `search` rows never count in usage aggregates or cost.
@@ -23,7 +23,7 @@ The tee ([forwarding.md](forwarding.md#the-response)) keeps the last usage objec
 
 - `chat`: the last chunk with a non-null `usage` (it may have `choices: []` and precede `[DONE]`).
 - `responses`: the terminal event (`response.completed`, `response.incomplete`, or `response.failed`).
-- `anthropic`: `message_start` merged with `message_delta`; delta values are cumulative, so later ones replace earlier ones.
+- `anthropic`: `message_start` merged with `message_delta`; delta values are cumulative, so later ones replace earlier ones. `usage_json` is merged the same way, by top-level field, so a nested object such as `cache_creation` is replaced whole and a field no delta sends keeps its `message_start` value.
 - `images`: `image_generation.completed` or `image_edit.completed`.
 
 Normalization into the row:
