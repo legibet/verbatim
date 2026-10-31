@@ -284,7 +284,7 @@ routes:
 		"cache_write":         {deref(row.CacheWriteTokens), int64(2)},
 		"cache_write_1h":      {deref(row.CacheWrite1hTokens), nil},
 		"output":              {deref(row.OutputTokens), int64(7)},
-		"usage_json":          {deref(row.UsageJSON), `{"output_tokens":7}`},
+		"usage_json":          {deref(row.UsageJSON), `{"input_tokens":10,"cache_read_input_tokens":5,"cache_creation_input_tokens":2,"output_tokens":7}`},
 		"price_key":           {deref(row.PriceKey), "claude-x"},
 		"error":               {deref(row.Error), nil},
 	}
@@ -944,6 +944,66 @@ func TestPinStrict(t *testing.T) {
 	// A new session behaves like a first request and fails over.
 	if res := g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "new"); res.body != `{"from":"b"}` {
 		t.Errorf("new session: %d %s", res.status, res.body)
+	}
+}
+
+// A target its breaker would refuse (open, or half-open with another
+// request's probe in flight) is skipped at dispatch, so a session's first
+// request does not reserve it: a strict request that hits the reservation
+// while the first is still in flight goes where the first went.
+func TestPinReserveSkipsRefusedTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cooldown  string
+		holdProbe bool
+	}{
+		{"open", "1h", false},
+		{"probing", "1ms", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newUpstream(t, reply(200, `{"from":"a"}`))
+			started, release := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			b := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					close(started)
+					<-release
+				}
+				reply(200, `{"from":"b"}`)(w, r)
+			})
+			g := newGateway(t, sessionTargets(a.URL, b.URL, "strict")+"breaker:\n  failure_threshold: 1\n  cooldown: "+tc.cooldown+"\n")
+			breakers, endpoint := g.h.rt.Load().breakers, config.EndpointName("a", "chat")
+			breakers.Failure(endpoint, false)
+			if tc.holdProbe {
+				time.Sleep(10 * time.Millisecond)
+				if ok, probe := breakers.Admit(endpoint); !ok || !probe {
+					t.Fatal("could not take the probe")
+				}
+			}
+			send := func() result { return g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "S") }
+
+			done := make(chan result)
+			go func() { done <- send() }()
+			<-started
+			second := send()
+			close(release)
+			first := <-done
+
+			for _, c := range []struct {
+				res       result
+				wantState string
+			}{{first, "reserved"}, {second, "hit"}} {
+				if c.res.status != 200 || c.res.body != `{"from":"b"}` {
+					t.Fatalf("%s request: got %d %s", c.wantState, c.res.status, c.res.body)
+				}
+				if state, prov := pinState(t, g, c.res.rid); state != c.wantState || prov != "b" {
+					t.Errorf("pin = %s on %s, want %s on b", state, prov, c.wantState)
+				}
+			}
+			if a.count() != 0 {
+				t.Errorf("a got %d requests", a.count())
+			}
+		})
 	}
 }
 

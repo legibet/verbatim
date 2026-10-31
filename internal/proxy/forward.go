@@ -260,8 +260,13 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 		x.pin.target, x.pin.has = h.pins.Get(x.pin.key)
 	} else {
 		// Reserving before the first attempt makes concurrent first requests
-		// of a session agree on one target (docs/affinity.md).
-		x.pin.target, x.pin.reserved = h.pins.Reserve(x.pin.key, order[0].TargetID)
+		// of a session agree on one target (docs/affinity.md). The reserved
+		// target is the one about to be tried: the first its breaker would
+		// admit, since the others are skipped at dispatch.
+		i := slices.IndexFunc(order, func(c route.Candidate) bool {
+			return x.rt.breakers.WouldAdmit(config.EndpointName(c.Provider, string(x.proto.ID())))
+		})
+		x.pin.target, x.pin.reserved = h.pins.Reserve(x.pin.key, order[max(i, 0)].TargetID)
 		x.pin.has = true
 	}
 	if !x.pin.has {

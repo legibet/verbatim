@@ -67,6 +67,15 @@ func (b *Breakers) Admit(endpoint string) (ok, probe bool) {
 	}
 }
 
+// WouldAdmit reports whether Admit would admit an attempt to the endpoint
+// now, without taking the half-open probe.
+func (b *Breakers) WouldAdmit(endpoint string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	br := b.get(endpoint)
+	return br.openUntil.IsZero() || !br.probing && !b.now().Before(br.openUntil)
+}
+
 // Success records a committed response: the breaker closes and the
 // consecutive failure counter resets.
 func (b *Breakers) Success(endpoint string) {
