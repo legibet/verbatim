@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"syscall"
 
-	"verbatim/internal/config"
-	"verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/pricing"
 )
 
 const pricingUsage = `Usage:

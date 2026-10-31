@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"verbatim/internal/affinity"
-	"verbatim/internal/config"
-	"verbatim/internal/models"
-	"verbatim/internal/pricing"
-	"verbatim/internal/proxy"
-	"verbatim/internal/store"
-	"verbatim/internal/ui"
+	"github.com/legibet/verbatim/internal/affinity"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/models"
+	"github.com/legibet/verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/proxy"
+	"github.com/legibet/verbatim/internal/store"
+	"github.com/legibet/verbatim/internal/ui"
 )
 
 const (

@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"verbatim/internal/config"
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // provider serves GET /models with the pages given, keyed by the after_id

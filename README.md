@@ -22,9 +22,7 @@ Not supported: Gemini's native API (use Google's OpenAI-compatible endpoint as a
 Requires Go 1.27. The web UI is prebuilt, so Node is not needed.
 
 ```sh
-git clone https://github.com/legibet/verbatim.git
-cd verbatim
-go install ./cmd/verbatim
+go install github.com/legibet/verbatim/cmd/verbatim@latest
 ```
 
 ## Quick start

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"verbatim/internal/protocol"
-	"verbatim/internal/route"
+	"github.com/legibet/verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/route"
 )
 
 type clock struct{ t time.Time }

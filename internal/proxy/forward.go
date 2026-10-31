@@ -18,13 +18,13 @@ import (
 
 	"github.com/tidwall/sjson"
 
-	"verbatim/internal/affinity"
-	"verbatim/internal/config"
-	"verbatim/internal/models"
-	"verbatim/internal/pricing"
-	"verbatim/internal/protocol"
-	"verbatim/internal/route"
-	"verbatim/internal/store"
+	"github.com/legibet/verbatim/internal/affinity"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/models"
+	"github.com/legibet/verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/route"
+	"github.com/legibet/verbatim/internal/store"
 )
 
 const (

@@ -13,7 +13,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/pricing"
 )
 
 func TestImages(t *testing.T) {

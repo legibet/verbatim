@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"verbatim/internal/config"
-	"verbatim/internal/models"
-	"verbatim/internal/pricing"
-	"verbatim/internal/proxy"
-	"verbatim/internal/route"
-	"verbatim/internal/store"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/models"
+	"github.com/legibet/verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/proxy"
+	"github.com/legibet/verbatim/internal/route"
+	"github.com/legibet/verbatim/internal/store"
 )
 
 const testConfig = `

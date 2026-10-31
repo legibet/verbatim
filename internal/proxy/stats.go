@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"verbatim/internal/models"
-	"verbatim/internal/route"
+	"github.com/legibet/verbatim/internal/models"
+	"github.com/legibet/verbatim/internal/route"
 )
 
 // Stats is the gateway's live in-memory state, for /ui/api/providers and

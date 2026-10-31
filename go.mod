@@ -1,4 +1,4 @@
-module verbatim
+module github.com/legibet/verbatim
 
 go 1.27.2
 

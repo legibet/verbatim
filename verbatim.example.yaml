@@ -231,8 +231,8 @@ log:
 # expose to a priced name. `overrides` is a local file in the same shape for
 # prices you maintain. The provider files have no image token prices, so an
 # image model is priced there, with "image_input" and "image_output":
-#   {"models": {"gpt-image-2": {"cost": {"input": 5, "cache_read": 1.25,
-#                                        "image_input": 8, "image_output": 30}}}}
+#   {"models": {"gpt-image-2": {"cost": {"input": 5, "image_input": 8,
+#                                        "image_output": 30}}}}
 # ---------------------------------------------------------------------------
 pricing:
   sources:

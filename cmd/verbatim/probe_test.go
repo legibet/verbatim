@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/config"
 )
 
 func TestProbe(t *testing.T) {

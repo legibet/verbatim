@@ -8,8 +8,8 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"verbatim/internal/config"
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // fakeProto implements only what Key uses; the embedded nil interface

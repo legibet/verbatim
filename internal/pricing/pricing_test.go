@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 var realSources = []string{

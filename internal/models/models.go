@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"verbatim/internal/config"
-	"verbatim/internal/protocol"
-	"verbatim/internal/route"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/route"
 )
 
 const (

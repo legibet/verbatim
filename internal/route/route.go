@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"verbatim/internal/config"
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // TargetID identifies a target: a provider and the upstream model name sent to it.

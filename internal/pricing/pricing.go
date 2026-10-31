@@ -16,7 +16,7 @@ import (
 	"slices"
 	"strings"
 
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // Price is the cost entry of one model. All prices are USD per 1M tokens.

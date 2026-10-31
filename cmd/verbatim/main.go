@@ -16,8 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"verbatim/internal/config"
-	"verbatim/internal/store"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/store"
 )
 
 const usageText = `verbatim is a small LLM API gateway.

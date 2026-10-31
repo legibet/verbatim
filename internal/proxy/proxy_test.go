@@ -25,12 +25,12 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/tidwall/gjson"
 
-	"verbatim/internal/affinity"
-	"verbatim/internal/config"
-	"verbatim/internal/models"
-	"verbatim/internal/pricing"
-	"verbatim/internal/protocol"
-	"verbatim/internal/store"
+	"github.com/legibet/verbatim/internal/affinity"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/models"
+	"github.com/legibet/verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/store"
 )
 
 // upstream is a fake provider that records every request it receives.

@@ -17,11 +17,11 @@ import (
 	"syscall"
 	"time"
 
-	"verbatim/internal/config"
-	"verbatim/internal/pricing"
-	"verbatim/internal/protocol"
-	"verbatim/internal/store"
-	"verbatim/internal/ui"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/pricing"
+	"github.com/legibet/verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/store"
+	"github.com/legibet/verbatim/internal/ui"
 )
 
 func usage(args []string) int {

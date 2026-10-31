@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"verbatim/internal/config"
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 func testConfig() *config.Config {

@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"verbatim/internal/config"
-	"verbatim/internal/models"
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/models"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // probeTimeout bounds the probe of one endpoint.

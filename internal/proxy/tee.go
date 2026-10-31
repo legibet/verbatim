@@ -13,7 +13,7 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // usageTee feeds a copy of the committed body to the protocol's usage

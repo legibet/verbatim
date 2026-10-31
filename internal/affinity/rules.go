@@ -10,8 +10,8 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"verbatim/internal/config"
-	"verbatim/internal/protocol"
+	"github.com/legibet/verbatim/internal/config"
+	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // Rules is the compiled affinity.rules list plus the fallback setting.
