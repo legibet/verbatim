@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ Usage:
   verbatim pricing sync                    download pricing.sources into pricing.cache
   verbatim pricing show <model>            the price entry for a client model name
   verbatim status                          live endpoint state from the running server
+  verbatim version                         the version this binary was built from
 
 ` + configHelp + `
 Run 'verbatim <command> -h' for a command's flags.
@@ -69,9 +71,21 @@ func run(args []string) int {
 	case "help":
 		fmt.Print(usageText)
 		return 0
+	case "version":
+		fmt.Println(version())
+		return 0
 	}
 	fmt.Fprintf(os.Stderr, "verbatim: unknown command %q\n\n%s", cmd, usageText)
 	return 2
+}
+
+// version is the module version the binary was built from: the release tag,
+// a pseudo-version for an untagged commit, or "(devel)".
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		return info.Main.Version
+	}
+	return "(devel)"
 }
 
 // newFlags returns a flag set for a command with the shared -c flag.

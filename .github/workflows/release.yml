@@ -1,0 +1,62 @@
+name: Release
+
+# Pushing an annotated tag vX.Y.Z publishes a GitHub release with the tag
+# message as its notes and a binary archive per platform.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          # Outside the checkout: an untracked file there would make Go stamp
+          # the version as dirty.
+          build=$RUNNER_TEMP/build
+          out=$RUNNER_TEMP/out
+          mkdir -p "$build" "$out"
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name=verbatim_${version}_${os}_${arch}
+            ext=""
+            if [ "$os" = windows ]; then ext=.exe; fi
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$build/$name/verbatim$ext" ./cmd/verbatim
+            cp LICENSE README.md verbatim.example.yaml "$build/$name/"
+            if [ "$os" = windows ]; then
+              (cd "$build" && zip -qr "$out/$name.zip" "$name")
+            else
+              tar -C "$build" -czf "$out/$name.tar.gz" "$name"
+            fi
+          done
+          # Go stamps the module version from the tag; a mismatch means the
+          # checkout did not build the tagged commit cleanly.
+          got=$("$build/verbatim_${version}_linux_amd64/verbatim" version)
+          if [ "$got" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::binary reports version $got, want $GITHUB_REF_NAME"
+            exit 1
+          fi
+          (cd "$out" && sha256sum -- * > checksums.txt)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The checkout may hold the tag without its annotation.
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag --list --format='%(contents)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/out/* --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"

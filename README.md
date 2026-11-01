@@ -19,7 +19,9 @@ Not supported: Gemini's native API (use Google's OpenAI-compatible endpoint as a
 
 ## Install
 
-Requires Go 1.27. The web UI is prebuilt, so Node is not needed.
+Download an archive for your platform from [Releases](https://github.com/legibet/verbatim/releases) and put `verbatim` on your `PATH`. Each archive also has the example configuration.
+
+Or build it with Go 1.27 or later. 
 
 ```sh
 go install github.com/legibet/verbatim/cmd/verbatim@latest
@@ -96,6 +98,7 @@ verbatim log     <request_id>                one request in full: routing, attem
 verbatim pricing sync                        download pricing.sources into pricing.cache
 verbatim pricing show <model>                the price entry for a client model name
 verbatim status                              live endpoint state from the running server
+verbatim version                             the version this binary was built from
 ```
 
 `usage` and `log` read the database directly and work while the server runs. Only `serve` and `check` need the provider keys in the environment.

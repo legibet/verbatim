@@ -102,7 +102,7 @@ The running server reads the file again on `SIGHUP` or on the web UI's Reload co
 
 ## CLI
 
-`usage` and `log` read the SQLite file directly and work while the server runs. `status` calls the running server's `/ui/api/providers`, because breakers and pins live in its memory. Commands other than `serve` and `check` load the configuration leniently: an unset `${VAR}` becomes empty and validation is skipped, so they run without provider keys.
+`usage` and `log` read the SQLite file directly and work while the server runs. `status` calls the running server's `/ui/api/providers`, because breakers and pins live in its memory. Commands other than `serve` and `check` load the configuration leniently: an unset `${VAR}` becomes empty and validation is skipped, so they run without provider keys. `version` prints the module version Go stamped into the binary: the release tag, or a pseudo-version for an untagged build.
 
 `check --probe` sends each endpoint an empty JSON request (`{}`) at the path of its main operation (`create`, or `generate` for `images`), with the headers and key the gateway would send. Any failure makes `check` exit 1. No reply means the host, port, or scheme is wrong; 401 or 403 means the key is rejected; a redirect, 404, or non-JSON reply means `base_url` does not lead to the API. Anything else (typically 400 for missing fields) counts as ok. An ok is not proof: an upstream that answers every path under a prefix hides an extra path segment, and one that does not check keys hides a wrong key.
 

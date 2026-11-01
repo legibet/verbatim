@@ -166,7 +166,7 @@ func runServer(path string) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("verbatim listening", "addr", ln.Addr().String(), "providers", len(cfg.Providers),
+	slog.Info("verbatim listening", "version", version(), "addr", ln.Addr().String(), "providers", len(cfg.Providers),
 		"routes", len(cfg.Routes), "db", cfg.Log.Path, "config", path)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -32,3 +32,13 @@ golangci-lint run ./... # config in .golangci.yml; also checks gofmt and goimpor
 cd web && pnpm build    # type-checks, then writes internal/ui/dist
 cd web && pnpm dev      # UI dev server; needs a running verbatim at $VERBATIM_URL (default http://127.0.0.1:8080)
 ```
+
+## Releasing
+
+Versions are semver tags, `v0.x` until the configuration format is stable. To release, write notes for users (what changed, and any configuration change they must make) and push them as an annotated tag:
+
+```sh
+git tag -a v0.2.0 -F notes.md && git push origin v0.2.0
+```
+
+The Release workflow tests, builds an archive per platform, and publishes a GitHub release with the tag message as its notes. CI runs on every push and pull request, including a check that `internal/ui/dist` matches a fresh build of `web/`.
