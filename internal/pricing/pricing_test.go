@@ -16,16 +16,18 @@ import (
 	"github.com/legibet/verbatim/internal/protocol"
 )
 
-var realSources = []string{
+// fixtureSources name the hand-written provider files in testdata. They have
+// the shape of the llm-metadata files a sync downloads; the prices are made up.
+var fixtureSources = []string{
 	"https://basellm.github.io/llm-metadata/api/providers/anthropic.json",
 	"https://basellm.github.io/llm-metadata/api/providers/openai.json",
 }
 
 func n(v int64) *int64 { return new(v) }
 
-func loadReal(t *testing.T, overrides string, aliases map[string]string) (*Table, []string) {
+func loadFixtures(t *testing.T, overrides string, aliases map[string]string) (*Table, []string) {
 	t.Helper()
-	tab, warnings, err := Load("testdata", realSources, overrides, aliases)
+	tab, warnings, err := Load("testdata", fixtureSources, overrides, aliases)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,8 +36,8 @@ func loadReal(t *testing.T, overrides string, aliases map[string]string) (*Table
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
 
-func TestLoadReal(t *testing.T) {
-	tab, warnings := loadReal(t, "", nil)
+func TestLoadProviderFiles(t *testing.T) {
+	tab, warnings := loadFixtures(t, "", nil)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
@@ -57,7 +59,7 @@ func TestLoadReal(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	tab, _ := loadReal(t, "", map[string]string{
+	tab, _ := loadFixtures(t, "", map[string]string{
 		"opus-dated":     "claude-opus-5-5",
 		"relay-gpt":      "gpt-5.5",
 		"dead-alias":     "no-such-model",
@@ -85,7 +87,7 @@ func TestLookup(t *testing.T) {
 }
 
 func TestCost(t *testing.T) {
-	tab, _ := loadReal(t, "", nil)
+	tab, _ := loadFixtures(t, "", nil)
 	price := func(m string) Price {
 		_, p, ok := tab.Lookup(m, "")
 		if !ok {
