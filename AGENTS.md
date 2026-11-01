@@ -20,6 +20,7 @@ The docs under `docs/` are the behavior contract. Before changing an area, read 
 - A configuration change also updates `verbatim.example.yaml`, the annotated reference for every field, and the validation in `internal/config`.
 - Prefer the standard library; ask before adding a Go or npm dependency.
 - Test against `httptest` fake upstreams. Failover, affinity, and usage parsing carry the risk, so changes there come with tests.
+- `golangci-lint run` must pass. Fix what it reports; a `//nolint:<linter> // <reason>` is only for a false positive.
 - A change under `web/` ends with `pnpm build` and the rebuilt `internal/ui/dist` committed alongside it; the Go binary embeds that directory.
 
 ## Commands
@@ -27,7 +28,7 @@ The docs under `docs/` are the behavior contract. Before changing an area, read 
 ```sh
 go test -race ./...
 go vet ./...
-gofmt -l .
+golangci-lint run ./... # config in .golangci.yml; also checks gofmt and goimports
 cd web && pnpm build    # type-checks, then writes internal/ui/dist
 cd web && pnpm dev      # UI dev server; needs a running verbatim at $VERBATIM_URL (default http://127.0.0.1:8080)
 ```

@@ -153,7 +153,7 @@ func (c *Cache) keepFresh(ctx context.Context, e endpoint, warmed func()) {
 func (c *Cache) Refresh(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, e := range c.endpoints {
-		wg.Go(func() { c.refresh(ctx, e) })
+		wg.Go(func() { _ = c.refresh(ctx, e) })
 	}
 	wg.Wait()
 }

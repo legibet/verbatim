@@ -21,7 +21,7 @@ var realSources = []string{
 	"https://basellm.github.io/llm-metadata/api/providers/openai.json",
 }
 
-func n(v int64) *int64 { return &v }
+func n(v int64) *int64 { return new(v) }
 
 func loadReal(t *testing.T, overrides string, aliases map[string]string) (*Table, []string) {
 	t.Helper()
@@ -435,8 +435,7 @@ func TestWatch(t *testing.T) {
 	ov := filepath.Join(dir, "overrides.json")
 	writeJSON(t, file, m{"id": "a", "models": m{"one": m{"cost": m{"input": 1, "output": 1}}}})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	tables := make(chan *Table, 4)
 	go Watch(ctx, 10*time.Millisecond, dir, sources, ov, func() (*Table, []string, error) {
 		t, warnings, err := Load(dir, sources, ov, nil)

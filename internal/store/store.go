@@ -107,12 +107,12 @@ func open(path string, retention time.Duration, queueSize int) (*Store, error) {
 	}
 	w.SetMaxOpenConns(1)
 	if err := migrate(w); err != nil {
-		w.Close()
+		_ = w.Close()
 		return nil, fmt.Errorf("log database %s: %w", path, err)
 	}
 	r, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		w.Close()
+		_ = w.Close()
 		return nil, fmt.Errorf("log database %s: %w", path, err)
 	}
 	s := &Store{
@@ -245,6 +245,7 @@ func (s *Store) insert(batch []*Request) {
 		slog.Warn("log write failed", "rows", len(batch), "err", err)
 		return
 	}
+	defer stmt.Close()
 	for _, r := range batch {
 		_, err := stmt.Exec(
 			r.TS.UnixMilli(), r.RequestID, r.UpstreamRequestID, r.Protocol, r.Operation, r.ClientModel, r.Route,
@@ -257,7 +258,6 @@ func (s *Store) insert(batch []*Request) {
 			slog.Warn("log row not written", "request_id", r.RequestID, "err", err)
 		}
 	}
-	stmt.Close()
 	if err := tx.Commit(); err != nil {
 		slog.Warn("log write failed", "rows", len(batch), "err", err)
 	}

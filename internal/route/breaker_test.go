@@ -59,8 +59,8 @@ func TestBreakerHalfOpen(t *testing.T) {
 	if st := b.State("p"); st.State != "half_open" {
 		t.Fatalf("after cooldown: %+v", st)
 	}
-	if !b.WouldAdmit("p") || !b.WouldAdmit("p") {
-		t.Fatal("WouldAdmit refused the free probe or took it")
+	if !b.WouldAdmit("p") {
+		t.Fatal("WouldAdmit refused the free probe")
 	}
 	if !admit(b, "p") {
 		t.Fatal("probe not admitted after cooldown")
@@ -87,8 +87,10 @@ func TestBreakerHalfOpen(t *testing.T) {
 	if st := b.State("p"); st.State != "closed" || st.Failures != 0 || !st.OpenUntil.IsZero() {
 		t.Fatalf("after successful probe: %+v", st)
 	}
-	if !admit(b, "p") || !admit(b, "p") || !b.WouldAdmit("p") {
-		t.Fatal("closed breaker refused")
+	for range 2 {
+		if !admit(b, "p") || !b.WouldAdmit("p") {
+			t.Fatal("closed breaker refused")
+		}
 	}
 }
 

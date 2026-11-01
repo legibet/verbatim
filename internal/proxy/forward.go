@@ -241,7 +241,7 @@ func (x *exchange) order(body []byte, model, routeName string, cands []route.Can
 				fmt.Sprintf("response %q belongs to provider %q, which no longer has a %s endpoint", id, provider, x.proto.ID()))
 			return nil, false
 		}
-		owner := route.Candidate{TargetID: route.TargetID{Provider: provider, Model: upstreamModel}, Priority: 1, Weight: 1}
+		owner := route.Candidate{Provider: provider, Model: upstreamModel, Priority: 1, Weight: 1}
 		if i := slices.IndexFunc(cands, func(c route.Candidate) bool { return c.TargetID == owner.TargetID }); i >= 0 {
 			owner = cands[i]
 		}
@@ -658,7 +658,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 				break
 			}
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			x.writeTrailers(resp.Trailer)
 			x.row.Outcome = outcomeCompleted
 			break

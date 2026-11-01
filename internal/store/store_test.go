@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-func ptr[T any](v T) *T { return &v }
-
 func openTest(t *testing.T, queue int) *Store {
 	t.Helper()
 	s, err := open(filepath.Join(t.TempDir(), "sub", "v.db"), 0, queue)
@@ -63,8 +61,8 @@ func (r rowSpec) request(i int) *Request {
 		Protocol:    r.proto,
 		Operation:   r.op,
 		ClientModel: r.model,
-		Route:       ptr(r.route),
-		Provider:    ptr(r.provider),
+		Route:       new(r.route),
+		Provider:    new(r.provider),
 		Status:      r.status,
 		Outcome:     r.outcome,
 		Attempts:    1,
@@ -76,25 +74,25 @@ func (r rowSpec) request(i int) *Request {
 		q.AttemptLog = fmt.Sprintf(`[{"provider":%q,"status":%d}]`, r.provider, r.status)
 	}
 	if !r.noTTFB {
-		q.TTFBMS = ptr(int64(50))
+		q.TTFBMS = new(int64(50))
 	}
 	if !r.noUsage {
-		q.InputTokens = ptr(r.input)
-		q.OutputTokens = ptr(r.out)
-		q.UsageJSON = ptr(`{}`)
+		q.InputTokens = new(r.input)
+		q.OutputTokens = new(r.out)
+		q.UsageJSON = new(`{}`)
 	}
 	return q
 }
 
 var fixture = []rowSpec{
-	{at: 0, proto: "anthropic", op: "create", model: "kimi-k3", route: "kimi-k3", provider: "moonshot", status: 200, outcome: "completed", input: 100, out: 10, cost: ptr(0.5)},
+	{at: 0, proto: "anthropic", op: "create", model: "kimi-k3", route: "kimi-k3", provider: "moonshot", status: 200, outcome: "completed", input: 100, out: 10, cost: new(0.5)},
 	{at: time.Hour, proto: "anthropic", op: "count_tokens", model: "kimi-k3", route: "kimi-k3", provider: "moonshot", status: 200, outcome: "completed", input: 999},
 	{at: 2 * time.Hour, proto: "chat", op: "create", model: "gpt-5.5", route: "gpt-*", provider: "openai", status: 200, outcome: "upstream_error_event", input: 50, out: 5},
 	{at: 25 * time.Hour, proto: "chat", op: "create", model: "gpt-5.5", route: "gpt-*", provider: "openai", status: 429, outcome: "completed", noUsage: true,
 		attempts: `[{"provider":"relay","status":503},{"provider":"openai","status":429}]`},
 	{at: 26 * time.Hour, proto: "responses", op: "create", model: "my_model%", route: "*", provider: "relay", status: 502, outcome: "gateway_error", noUsage: true, noTTFB: true,
 		attempts: `[{"provider":"relay","error":"dial"},{"provider":"openai","error":"dial"}]`},
-	{at: 27 * time.Hour, proto: "anthropic", op: "create", model: "kimi-k3", route: "kimi-k3", provider: "moonshot", status: 200, outcome: "completed", input: 10, out: 1, cost: ptr(0.25)},
+	{at: 27 * time.Hour, proto: "anthropic", op: "create", model: "kimi-k3", route: "kimi-k3", provider: "moonshot", status: 200, outcome: "completed", input: 10, out: 1, cost: new(0.25)},
 }
 
 func seed(t *testing.T, s *Store) {
@@ -137,16 +135,16 @@ func TestMigrateFromVersion1(t *testing.T) {
 func TestRoundTrip(t *testing.T) {
 	s := openTest(t, 16)
 	in := &Request{
-		TS: base, RequestID: "abc", UpstreamRequestID: ptr("up-1"),
+		TS: base, RequestID: "abc", UpstreamRequestID: new("up-1"),
 		Protocol: "anthropic", Operation: "create", ClientModel: "m",
-		Route: ptr("m"), Provider: ptr("p"), UpstreamModel: ptr("um"),
+		Route: new("m"), Provider: new("p"), UpstreamModel: new("um"),
 		Status: 200, Outcome: "completed", Stream: true, Attempts: 2,
-		AttemptsMS: 30, TTFBMS: ptr(int64(40)), TotalMS: 90,
-		RoutingJSON: `{"route":"m"}`, AttemptLog: `[]`, AffinityKey: ptr("k"),
-		InputTokens: ptr(int64(1)), CacheReadTokens: ptr(int64(2)), CacheWriteTokens: ptr(int64(3)),
-		CacheWrite1hTokens: ptr(int64(1)), OutputTokens: ptr(int64(4)), ReasoningTokens: ptr(int64(2)),
-		InputImageTokens: ptr(int64(1)), OutputImageTokens: ptr(int64(3)),
-		UsageJSON: ptr(`{"x":1}`), CostUSD: ptr(1.5), PriceKey: ptr("m"), PriceJSON: ptr(`{}`), Error: nil,
+		AttemptsMS: 30, TTFBMS: new(int64(40)), TotalMS: 90,
+		RoutingJSON: `{"route":"m"}`, AttemptLog: `[]`, AffinityKey: new("k"),
+		InputTokens: new(int64(1)), CacheReadTokens: new(int64(2)), CacheWriteTokens: new(int64(3)),
+		CacheWrite1hTokens: new(int64(1)), OutputTokens: new(int64(4)), ReasoningTokens: new(int64(2)),
+		InputImageTokens: new(int64(1)), OutputImageTokens: new(int64(3)),
+		UsageJSON: new(`{"x":1}`), CostUSD: new(1.5), PriceKey: new("m"), PriceJSON: new(`{}`), Error: nil,
 	}
 	s.Record(in)
 	flush(t, s, 1)

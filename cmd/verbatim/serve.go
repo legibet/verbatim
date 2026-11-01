@@ -151,7 +151,7 @@ func runServer(path string) error {
 	defer signal.Stop(hup)
 	go func() {
 		for range hup {
-			reloadConfig()
+			_, _ = reloadConfig() // it logs the outcome
 		}
 	}()
 
@@ -185,7 +185,7 @@ func runServer(path string) error {
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
 		slog.Warn("in-flight requests did not finish in time; closing their connections", "err", err)
-		srv.Close()
+		_ = srv.Close()
 	}
 	// Close does not wait for handlers whose connections it cut; their rows
 	// must reach the store before it closes.

@@ -867,6 +867,7 @@ routes:
 
 func TestLoadLenient(t *testing.T) {
 	write := func(t *testing.T, src string) string {
+		t.Helper()
 		path := filepath.Join(t.TempDir(), "verbatim.yaml")
 		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 			t.Fatal(err)

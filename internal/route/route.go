@@ -90,7 +90,7 @@ func (t *Table) Match(proto protocol.ID, clientModel string) (route string, cand
 				continue
 			}
 			cands = append(cands, Candidate{
-				TargetID: TargetID{Provider: tg.provider, Model: r.upstream(tg.model, clientModel)},
+				Provider: tg.provider, Model: r.upstream(tg.model, clientModel),
 				Priority: tg.priority,
 				Weight:   tg.weight,
 			})

@@ -184,8 +184,7 @@ routes:
 		t.Fatal(err)
 	}
 	c := New(cfg, nil, time.Minute, time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	c.Start(ctx)
 	// Names called right after Start waits for the first fetch.
 	if got := names(c); !slices.Equal(got, []string{"m-1"}) {

@@ -74,7 +74,7 @@ func (u *upstream) last() seen {
 }
 
 // closedURL is the address of a server that is no longer listening.
-func closedURL(t *testing.T) string {
+func closedURL() string {
 	s := httptest.NewServer(http.NotFoundHandler())
 	s.Close()
 	return s.URL
@@ -422,6 +422,7 @@ func TestCompressedStreamUsageAndOwnership(t *testing.T) {
 }
 
 func testCompressedStream(t *testing.T, encoding string) {
+	t.Helper()
 	events := []string{
 		"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_gz\",\"status\":\"in_progress\"}}\n\n",
 		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
@@ -578,7 +579,7 @@ func TestFailoverStatuses(t *testing.T) {
 
 	t.Run("connect error", func(t *testing.T) {
 		b := newUpstream(t, reply(200, `{"ok":"b"}`))
-		g := newGateway(t, twoTargets(closedURL(t), b.URL, ""))
+		g := newGateway(t, twoTargets(closedURL(), b.URL, ""))
 		res := g.post(t, "/v1/chat/completions", chatBody)
 		if res.status != 200 {
 			t.Fatalf("got %d %s", res.status, res.body)
@@ -702,7 +703,7 @@ func TestExhaustion(t *testing.T) {
 
 	t.Run("last attempt without response", func(t *testing.T) {
 		a := newUpstream(t, reply(503, `A`))
-		g := newGateway(t, twoTargets(a.URL, closedURL(t), ""))
+		g := newGateway(t, twoTargets(a.URL, closedURL(), ""))
 		res := g.post(t, "/v1/chat/completions", chatBody)
 		if res.status != 502 || res.header.Get("X-Verbatim-Error") != "all_upstreams_failed" {
 			t.Fatalf("got %d %v %s", res.status, res.header, res.body)
@@ -721,7 +722,7 @@ func TestAllConnectFailuresNative502(t *testing.T) {
 		{"anthropic", "/v1/messages", `{"model":"m","messages":[]}`, "", "error.message"},
 	} {
 		t.Run(tc.typ, func(t *testing.T) {
-			g := newGateway(t, "providers:\n"+prov("a", tc.typ, closedURL(t))+prov("b", tc.typ, closedURL(t))+`
+			g := newGateway(t, "providers:\n"+prov("a", tc.typ, closedURL())+prov("b", tc.typ, closedURL())+`
 routes:
   - model: m
     targets: [{provider: a}, {provider: b}]
@@ -833,6 +834,7 @@ affinity:
 }
 
 func pinState(t *testing.T, g *gateway, rid string) (state, provider string) {
+	t.Helper()
 	row := g.row(t, rid)
 	return gjson.Get(row.RoutingJSON, "pin.state").Str, deref(row.Provider).(string)
 }
@@ -897,7 +899,7 @@ func TestPinCommittedByHitSurvivesRelease(t *testing.T) {
 		}
 		reply(200, `{"from":"a"}`)(w, r)
 	})
-	g := newGateway(t, sessionTargets(a.URL, closedURL(t), "prefer"))
+	g := newGateway(t, sessionTargets(a.URL, closedURL(), "prefer"))
 	send := func() result { return g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "S") }
 
 	first := make(chan result)

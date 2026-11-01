@@ -76,20 +76,17 @@ func writeAtomic(name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
+	_, err = tmp.Write(data)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
+	if err == nil {
+		err = os.Rename(tmp.Name(), name)
 	}
-	if err := os.Rename(tmp.Name(), name); err != nil {
-		os.Remove(tmp.Name())
-		return err
+	if err != nil {
+		_ = os.Remove(tmp.Name())
 	}
-	return nil
+	return err
 }
 
 // Watch calls reload, which loads and installs the table, whenever a cached
