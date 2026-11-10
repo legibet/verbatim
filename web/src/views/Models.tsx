@@ -21,7 +21,7 @@ import { fmtInt, fmtPrice } from "@/format"
 import { cn } from "@/lib/utils"
 
 // Models lists the names /v1/models returns, with the route that serves
-// each, its providers, and its price. A row opens to every target per
+// each, its providers, and its price. A row opens to its targets per
 // protocol. Its actions fetch every model list and sync the price table.
 export function Models() {
   const { data, error, reload } = useApi("models", isModelsView, 30_000)
@@ -223,24 +223,35 @@ function Footnotes({ data }: { data: ModelsView }) {
   )
 }
 
+// ModelRows is a name's row and, when open, its targets. A name without
+// targets, an exact-name route that no endpoint lists, does not open.
 function ModelRows({ m, open, onToggle }: { m: ModelView; open: boolean; onToggle: () => void }) {
+  const listed = m.protocols.length > 0
   const providers = providersOf(m)
   const priced = m.protocols.flatMap((p) => p.targets.flatMap((t) => (t.price ? [t.price] : [])))
   // The main row shows text prices; image prices are in the open row.
   return (
     <>
-      <TableRow data-state={open ? "selected" : undefined} className="cursor-pointer" onClick={onToggle}>
+      <TableRow
+        data-state={open && listed ? "selected" : undefined}
+        className={cn(listed && "cursor-pointer")}
+        onClick={listed ? onToggle : undefined}
+      >
         <TableCell>
           <button
             type="button"
-            aria-expanded={open}
-            className="inline-flex cursor-pointer items-baseline gap-2 font-medium outline-none focus-visible:underline"
+            disabled={!listed}
+            aria-expanded={listed ? open : undefined}
+            className="inline-flex items-baseline gap-2 font-medium outline-none focus-visible:underline enabled:cursor-pointer"
             onClick={(e) => {
               e.stopPropagation()
               onToggle()
             }}
           >
-            <span aria-hidden className={cn("inline-block w-2.5 text-muted-foreground", open && "rotate-90")}>
+            <span
+              aria-hidden
+              className={cn("inline-block w-2.5 text-muted-foreground", open && "rotate-90", !listed && "invisible")}
+            >
               ›
             </span>
             {m.name}
@@ -258,7 +269,11 @@ function ModelRows({ m, open, onToggle }: { m: ModelView; open: boolean; onToggl
             ))}
           </span>
         </TableCell>
-        {priced.length === 0 ? (
+        {!listed ? (
+          <TableCell colSpan={3} className="text-right text-muted-foreground">
+            not listed by any endpoint
+          </TableCell>
+        ) : priced.length === 0 ? (
           <TableCell colSpan={3} className="text-right text-warn-ink">
             unpriced
           </TableCell>
@@ -270,7 +285,7 @@ function ModelRows({ m, open, onToggle }: { m: ModelView; open: boolean; onToggl
           </>
         )}
       </TableRow>
-      {open && (
+      {open && listed && (
         <TableRow className="[@media(hover:hover)]:hover:[&>td]:bg-transparent">
           <TableCell colSpan={7} className="py-3 pl-8.5 whitespace-normal">
             <Targets m={m} />
