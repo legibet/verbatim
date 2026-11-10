@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/legibet/verbatim/internal/config"
-	"github.com/legibet/verbatim/internal/protocol"
 )
 
 // provider serves GET /models with the pages given, keyed by the after_id
@@ -64,8 +63,8 @@ func TestNamesAndFetch(t *testing.T) {
 		"claude-b": `{"data":[{"id":"claude-c"},{"id":"gpt-6"}],"has_more":false,"last_id":"gpt-6"}`,
 	})
 	prefixed := newProvider(t, map[string]string{"": openai("openai/gpt-7", "openai/gpt-5", "openai/gpt-4x", "openai/o3", "other/gpt-8")})
-	rewrite := newProvider(t, nil) // must never be asked
-	unused := newProvider(t, nil)
+	rewrite := newProvider(t, map[string]string{"": openai("fixed")})
+	unused := newProvider(t, map[string]string{"": openai("kimi-k3")})
 
 	cfg, _, err := config.Parse([]byte(fmt.Sprintf(`
 providers:
@@ -79,6 +78,8 @@ providers:
   unused: {key: ku, endpoints: {chat: {base_url: %s}}}
 routes:
   - model: kimi-k3
+    targets: [{provider: unused}]
+  - model: kimi-k4
     targets: [{provider: unused}]
   - model: "gpt-4*"
     discover: false
@@ -99,10 +100,10 @@ routes:
 	for _, e := range c.endpoints {
 		fetched = append(fetched, e.name())
 	}
-	if want := []string{"multi.anthropic", "multi.chat", "prefixed.chat"}; !slices.Equal(fetched, want) {
+	if want := []string{"multi.anthropic", "multi.chat", "prefixed.chat", "rewrite.chat", "unused.chat"}; !slices.Equal(fetched, want) {
 		t.Fatalf("endpoints to fetch = %v, want %v", fetched, want)
 	}
-	if got := names(c); !slices.Equal(got, []string{"kimi-k3"}) {
+	if got := names(c); !slices.Equal(got, []string{"kimi-k3", "kimi-k4"}) {
 		t.Errorf("before any fetch: %v", got)
 	}
 	for _, e := range c.endpoints {
@@ -116,29 +117,41 @@ routes:
 	// gpt-4o belongs to the earlier gpt-4* route; o3 matches no pattern;
 	// prefixed's ids map back through openai/gpt-* to gpt-7 and gpt-5 (already
 	// listed) and gpt-4x (owned by gpt-4*); the others do not match it.
-	want := []string{"kimi-k3", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c"}
+	want := []string{"kimi-k3", "kimi-k4", "gpt-6", "gpt-5", "gpt-7", "claude-a", "claude-b", "claude-c"}
 	if got := names(c); !slices.Equal(got, want) {
 		t.Errorf("Names() = %v\nwant %v", got, want)
 	}
-	// Each name carries the protocols whose lists name it and their routes.
+	// rewrite lists fixed, so it serves every gpt-* name on chat. multi.chat
+	// lists neither gpt-6 nor gpt-7, and no endpoint lists kimi-k4.
 	for _, l := range c.Names(context.Background()) {
-		var want []Served
+		var want []string
 		switch l.Name {
 		case "kimi-k3":
-			want = []Served{{protocol.Chat, "kimi-k3"}}
+			want = []string{"chat kimi-k3 unused:kimi-k3"}
+		case "kimi-k4":
+			want = nil
 		case "gpt-6":
-			want = []Served{{protocol.Anthropic, "gpt-*"}}
+			want = []string{"chat gpt-* rewrite:fixed", "anthropic gpt-* multi:gpt-6"}
 		case "gpt-5":
-			want = []Served{{protocol.Chat, "gpt-*"}}
+			want = []string{"chat gpt-* multi:gpt-5 prefixed:openai/gpt-5 rewrite:fixed"}
 		default:
 			continue
 		}
-		if !slices.Equal(l.Served, want) {
-			t.Errorf("Names() %s: %+v, want %+v", l.Name, l.Served, want)
+		var got []string
+		for _, s := range l.Served {
+			g := string(s.Protocol) + " " + s.Route
+			for _, cand := range s.Targets {
+				g += " " + cand.Provider + ":" + cand.Model
+			}
+			got = append(got, g)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("Names() %s: %q, want %q", l.Name, got, want)
 		}
 	}
-	if rewrite.header.Load() != nil || unused.header.Load() != nil {
-		t.Error("a provider discovery does not read was fetched")
+
+	if h := rewrite.header.Load(); h == nil || h.Get("x-extra") != "1" {
+		t.Error("a fixed-model target's endpoint was not fetched with its headers")
 	}
 
 	h := *chat.header.Load()
@@ -150,7 +163,7 @@ routes:
 		t.Errorf("anthropic headers: %v", h)
 	}
 	states := c.States()
-	if s := states["multi.chat"]; len(states) != 3 || s.Fetched.IsZero() || s.Err != "" {
+	if s := states["multi.chat"]; len(states) != 5 || s.Fetched.IsZero() || s.Err != "" {
 		t.Errorf("States() = %v", states)
 	}
 

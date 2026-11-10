@@ -402,9 +402,8 @@ type ModelsView struct {
 	Failing []FailingList `json:"failing"`
 }
 
-// ModelView is one listed name: per protocol whose model lists name it, in
-// protocolOrder, its route and that route's candidates for it, by ascending
-// priority. Routes are the protocols' routes, each once.
+// ModelView is one listed name: per protocol in models.Served, its route and
+// targets by ascending priority. Routes are the protocols' routes, each once.
 type ModelView struct {
 	Name      string         `json:"name"`
 	Routes    []string       `json:"routes"`
@@ -450,35 +449,25 @@ func (s *server) modelsRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.listModels(r.Context()))
 }
 
-// protocolOrder is the order a model's protocols are shown in.
-var protocolOrder = []protocol.ID{protocol.Chat, protocol.Responses, protocol.Anthropic, protocol.Images}
-
 func (s *server) listModels(ctx context.Context) ModelsView {
 	// The routes come from the cache's own configuration: a reload swaps
 	// both together.
 	mc, prices := s.models(), s.pricing()
 	cfg := mc.Config()
-	routes := route.New(cfg)
 	v := ModelsView{Models: []ModelView{}, Unlisted: []string{}, Failing: []FailingList{}}
 	listing := map[string]bool{} // routes that list a name
 	for _, l := range mc.Names(ctx) {
 		m := ModelView{Name: l.Name, Routes: []string{}, Protocols: []ProtocolView{}}
-		for _, proto := range protocolOrder {
-			i := slices.IndexFunc(l.Served, func(s models.Served) bool { return s.Protocol == proto })
-			if i < 0 {
-				continue
+		for _, sv := range l.Served {
+			listing[sv.Route] = true
+			if !slices.Contains(m.Routes, sv.Route) {
+				m.Routes = append(m.Routes, sv.Route)
 			}
-			r := l.Served[i].Route
-			listing[r] = true
-			if !slices.Contains(m.Routes, r) {
-				m.Routes = append(m.Routes, r)
-			}
-			_, cands, _ := routes.Match(proto, l.Name)
-			slices.SortStableFunc(cands, func(a, b route.Candidate) int { return a.Priority - b.Priority })
-			pv := ProtocolView{Protocol: string(proto), Route: r, Targets: []TargetView{}}
-			for _, c := range cands {
+			slices.SortStableFunc(sv.Targets, func(a, b route.Candidate) int { return a.Priority - b.Priority })
+			pv := ProtocolView{Protocol: string(sv.Protocol), Route: sv.Route, Targets: []TargetView{}}
+			for _, c := range sv.Targets {
 				t := TargetView{Provider: c.Provider, UpstreamModel: c.Model, Priority: c.Priority}
-				if _, p, ok := prices.Lookup(l.Name, c.Model); ok && prices.Prices(proto, l.Name, c.Model) {
+				if _, p, ok := prices.Lookup(l.Name, c.Model); ok && prices.Prices(sv.Protocol, l.Name, c.Model) {
 					t.Price = &PriceView{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, ImageInput: p.ImageInput, ImageOutput: p.ImageOutput}
 				}
 				pv.Targets = append(pv.Targets, t)

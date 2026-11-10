@@ -56,22 +56,18 @@ type list struct {
 	err     string    // the last fetch's error; "" when it succeeded
 }
 
-// New returns a cache for cfg. Only endpoints that a discovering pattern
-// route uses without a literal model are ever fetched: no other list can
-// contribute to the listing. A nil transport means http.DefaultTransport.
+// New returns a cache for cfg that fetches the endpoints of exact and
+// discovering routes. A nil transport means http.DefaultTransport.
 func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Duration) *Cache {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
 	need := map[endpoint]bool{}
 	for _, r := range cfg.Routes {
-		if !discovers(r) {
+		if !config.IsExact(r.Model) && !discovers(r) {
 			continue
 		}
 		for _, t := range r.Targets {
-			if t.Model != "" && config.IsExact(t.Model) {
-				continue
-			}
 			provider, _ := t.Split()
 			for _, proto := range cfg.Protocols(t) {
 				need[endpoint{provider, proto}] = true
@@ -224,17 +220,18 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 	return all, nil
 }
 
-// Listed is a name in the listing and, per protocol it is listed for, in the
-// order first seen, the route that lists it.
+// Listed is a name in the listing and the protocols it is served for.
 type Listed struct {
 	Name   string
 	Served []Served
 }
 
-// Served is a protocol a name is listed for and the route that serves it.
+// Served is one protocol of a listed name: its route and the candidates
+// whose endpoint lists their upstream model.
 type Served struct {
 	Protocol protocol.ID
 	Route    string
+	Targets  []route.Candidate
 }
 
 // Names assembles the listing (docs/routing.md): per route in configuration
@@ -242,10 +239,13 @@ type Served struct {
 // route contributes the client names its targets' endpoints list: an id that
 // matches the pattern for a target without a model, or the pattern with its
 // '*' replaced by what the target model's '*' matched in the id. Targets with
-// a literal model contribute nothing. A name is kept only if routing would
-// send it to this route for that endpoint's protocol, so each protocol has
-// one route. A name is listed once, where it first occurs; an exact route
-// lists its name for the protocols routing sends it there for.
+// a literal model contribute nothing. A discovered name is kept only if
+// routing would send it to this route for that endpoint's protocol. A name is
+// listed once, where it first occurs.
+//
+// For each protocol whose route lists names, a name carries the candidates
+// whose endpoint lists their upstream model. A protocol without one is left
+// out.
 //
 // A call made while Start's first round of fetches is still running waits
 // for it, or until ctx is done, so that a client asking right after startup
@@ -268,37 +268,25 @@ func (c *Cache) Names(ctx context.Context) []Listed {
 	}
 	c.mu.Unlock()
 
-	index := map[string]int{} // name -> position in out
+	seen := map[string]bool{}
+	listingRoutes := map[string]bool{}
 	var out []Listed
-	add := func(name, route string, proto protocol.ID) {
-		i, ok := index[name]
-		if !ok {
-			i = len(out)
-			index[name] = i
+	add := func(name string) {
+		if !seen[name] {
+			seen[name] = true
 			out = append(out, Listed{Name: name})
-		}
-		if !slices.ContainsFunc(out[i].Served, func(s Served) bool { return s.Protocol == proto }) {
-			out[i].Served = append(out[i].Served, Served{proto, route})
 		}
 	}
 	for _, r := range c.cfg.Routes {
 		if config.IsExact(r.Model) {
-			if _, ok := index[r.Model]; !ok {
-				index[r.Model] = len(out)
-				out = append(out, Listed{Name: r.Model})
-			}
-			for _, t := range r.Targets {
-				for _, proto := range c.cfg.Protocols(t) {
-					if owner, _, ok := c.routes.Match(protocol.ID(proto), r.Model); ok && owner == r.Model {
-						add(r.Model, r.Model, protocol.ID(proto))
-					}
-				}
-			}
+			listingRoutes[r.Model] = true
+			add(r.Model)
 			continue
 		}
 		if !discovers(r) {
 			continue
 		}
+		listingRoutes[r.Model] = true
 		for _, t := range r.Targets {
 			if t.Model != "" && config.IsExact(t.Model) {
 				continue
@@ -322,9 +310,26 @@ func (c *Cache) Names(ctx context.Context) []Listed {
 						continue
 					}
 					if owner, _, ok := c.routes.Match(protocol.ID(proto), name); ok && owner == r.Model {
-						add(name, r.Model, protocol.ID(proto))
+						add(name)
 					}
 				}
+			}
+		}
+	}
+	for i := range out {
+		for _, proto := range protocol.All {
+			owner, cands, ok := c.routes.Match(proto.ID(), out[i].Name)
+			if !ok || !listingRoutes[owner] {
+				continue
+			}
+			s := Served{Protocol: proto.ID(), Route: owner}
+			for _, cand := range cands {
+				if slices.Contains(lists[config.EndpointName(cand.Provider, string(proto.ID()))], cand.Model) {
+					s.Targets = append(s.Targets, cand)
+				}
+			}
+			if len(s.Targets) > 0 {
+				out[i].Served = append(out[i].Served, s)
 			}
 		}
 	}

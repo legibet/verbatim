@@ -556,7 +556,7 @@ func TestModels(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, `{"data":[{"id":"m-1"},{"id":"other"}],"has_more":false}`)
+		fmt.Fprint(w, `{"data":[{"id":"m-1"},{"id":"exact-m"},{"id":"other"}],"has_more":false}`)
 	}))
 	defer up.Close()
 	cfg, _, err := config.Parse(fmt.Appendf(nil, `
@@ -613,23 +613,19 @@ routes:
 		len(exact.Protocols[0].Targets) != 1 || exact.Protocols[0].Targets[0].Price != nil {
 		t.Errorf("exact-m %+v", exact)
 	}
-	// m-1 is listed by up's chat endpoint under m-*, where bad, the second
-	// tier, is sent its own model name, and by up's anthropic endpoint under
-	// m-1*, which serves m-1's anthropic requests.
+	// m-1 is listed by up's chat endpoint under m-* and its anthropic
+	// endpoint under m-1*. bad's list failed, so bad is not a target.
 	if m1.Name != "m-1" || !slices.Equal(m1.Routes, []string{"m-*", "m-1*"}) || len(m1.Protocols) != 2 {
 		t.Fatalf("m-1 %+v", m1)
 	}
 	chat, anth := m1.Protocols[0].Targets, m1.Protocols[1].Targets
-	if m1.Protocols[0].Protocol != "chat" || m1.Protocols[0].Route != "m-*" || len(chat) != 2 ||
+	if m1.Protocols[0].Protocol != "chat" || m1.Protocols[0].Route != "m-*" || len(chat) != 1 ||
 		m1.Protocols[1].Protocol != "anthropic" || m1.Protocols[1].Route != "m-1*" || len(anth) != 1 || anth[0].Provider != "up" {
 		t.Fatalf("m-1 protocols %+v", m1.Protocols)
 	}
 	if chat[0].Provider != "up" || chat[0].UpstreamModel != "m-1" || chat[0].Priority != 1 ||
 		chat[0].Price == nil || chat[0].Price.Input != 1 || *chat[0].Price.Output != 2 {
 		t.Errorf("m-1 chat first target %+v", chat[0])
-	}
-	if chat[1].Provider != "bad" || chat[1].UpstreamModel != "bad-1" || chat[1].Priority != 2 || chat[1].Price == nil {
-		t.Errorf("m-1 chat second target %+v", chat[1])
 	}
 	if len(v.Failing) != 1 || v.Failing[0].Endpoint != "bad.chat" || !strings.Contains(v.Failing[0].Error, "HTTP 404") {
 		t.Errorf("failing %+v", v.Failing)

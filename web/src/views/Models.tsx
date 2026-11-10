@@ -281,8 +281,7 @@ function ModelRows({ m, open, onToggle }: { m: ModelView; open: boolean; onToggl
   )
 }
 
-// Targets lists every candidate per protocol in attempt-tier order, as the
-// gateway would route a request for this name.
+// Targets lists each protocol's targets by priority.
 function Targets({ m }: { m: ModelView }) {
   return (
     <table className="w-full max-w-5xl border-separate border-spacing-0 overflow-hidden rounded-lg border bg-background text-[12.5px] [&_td]:h-8 [&_td]:border-t [&_td]:border-rule [&_td]:px-3 [&_th]:h-7 [&_th]:bg-surface [&_th]:px-3 [&_th]:text-left [&_th]:text-[11.5px] [&_th]:font-medium [&_th]:whitespace-nowrap [&_th]:text-muted-foreground">
