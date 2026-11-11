@@ -1,6 +1,6 @@
 # verbatim
 
-verbatim is a self-hosted, pass-through LLM API gateway. It forwards each request as-is to upstreams that natively speak the same protocol, replacing only the URL, API key, and model name. Thinking signatures, encrypted reasoning, and prompt caches are kept intact.
+verbatim is a self-hosted, pass-through LLM API gateway. It forwards each request as-is to upstreams that natively speak the same protocol, changing only the URL, the API key, the model name, and whatever overrides you declare. Thinking signatures, encrypted reasoning, and prompt caches are kept intact.
 
 - Supports OpenAI Chat Completions, Responses, Images, and Anthropic Messages.
 - Routes by model name (with glob patterns), priority tiers, and weighted or round-robin balancing.
@@ -52,9 +52,12 @@ verbatim status                              live endpoint state from the runnin
 verbatim version                             print the build version
 ```
 
+Every command takes `-c <file>`. Without it, the configuration is `./verbatim.yaml` if that file exists, else `~/.verbatim/verbatim.yaml`. `verbatim <command> -h` lists a command's flags.
+
 ## Web UI
 
 Open `http://127.0.0.1:8080/ui/` (or your `server.listen` address) to view the live request log, per-request routing and attempt details, usage aggregates, models, and provider status (circuit breakers and active session pins). The Web UI supports syncing prices, refreshing model lists, and reloading the configuration, and it never modifies the configuration file.
+
 ## Development
 
 ```sh

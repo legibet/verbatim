@@ -43,7 +43,7 @@ Pricing exists only to put a cost on the log. It is configured list prices per t
 
 ### Sources
 
-`verbatim pricing sync` downloads each URL in `pricing.sources` into `pricing.cache`, named by the URL's last path element (two sources with the same file name are an error). The expected shape is the llm-metadata / models.dev provider file: `models.<id>.cost` with `input`, `output`, `cache_read`, `cache_write`, and optionally `reasoning`, `tiers`, and `currency`, plus provider-level `billing.cacheWrite1h`, the 1-hour cache write price as a multiple of `input`. Models that are not in USD, lack an `input` price, lack both `output` and `image_output`, or have a non-context tier type are skipped with a warning. When two sources define one model, the later source wins and `check` warns.
+`verbatim pricing sync` downloads each URL in `pricing.sources` into `pricing.cache`, named by the URL's last path element (two sources with the same file name are an error). The expected shape is the llm-metadata / models.dev provider file: `models.<id>.cost` with `input`, `output`, `cache_read`, `cache_write`, and optionally `reasoning`, `tiers`, and `currency`, plus provider-level `billing.cacheWrite1h`, the 1-hour cache write price as a multiple of `input`. Models that are not in USD, lack an `input` price, lack both `output` and `image_output`, or have a non-context tier type are skipped with a warning. When two sources define one model, the later source wins and `check` warns. Source URLs appear as written in the web UI's configuration view, in sync error messages, and in the log, so they must not carry credentials.
 
 `pricing.overrides` is a local file in the same shape, merged over the synced data. An override replaces a model's whole `cost`; the source's `billing.cacheWrite1h` still applies unless the overrides file sets its own. The provider files have no image prices, so image models are priced here, with `image_input` and `image_output` (and `output` may be omitted for a model without text output):
 
@@ -62,7 +62,7 @@ Prices are looked up by the **client's model name**, so a relay name that differ
 3. The upstream model name, then its alias.
 4. Otherwise no price: `cost_usd` is null and the row is still written.
 
-There is no prefix or fuzzy matching. A dated model name the table does not know needs an alias or an override. Aggregates count as unpriced the rows that have usage but no cost. The unpriced-models list shows which client names in the range the current table still cannot price: a request logged before its price was added keeps no cost and still counts as unpriced, but its name leaves the list.
+There is no prefix or fuzzy matching. A dated model name the table does not know needs an alias or an override. Aggregates count as unpriced the rows that have usage but no cost. The unpriced-models list shows which client names in the range have no entry in the current table (for an image request, no entry with an image price): a request logged before its price was added keeps no cost and still counts as unpriced, but its name leaves the list. A name whose entry exists but cannot price some of its requests, such as cache reads under an entry without `cache_read`, is counted as unpriced and not listed.
 
 ### Cost
 
