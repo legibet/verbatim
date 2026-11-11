@@ -248,6 +248,13 @@ func TestStreamUsage(t *testing.T) {
 			respID: "resp_68ef1a2b3c4d5e6f",
 		},
 		{
+			name:   "responses incomplete",
+			id:     Responses,
+			stream: "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_inc\",\"status\":\"in_progress\",\"usage\":null}}\n\nevent: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_inc\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}}\n\n",
+			want:   "in=5 cr=- cw=- cw1h=- out=3 rs=-",
+			respID: "resp_inc",
+		},
+		{
 			name:    "responses failed",
 			id:      Responses,
 			stream:  responsesFailedStream,

@@ -185,6 +185,26 @@ func (g *gateway) row(t *testing.T, rid string) *store.Request {
 	}
 }
 
+// onlyRow waits for the single log row of a test whose client never got a
+// response, and so has no request id to look the row up by.
+func onlyRow(t *testing.T, g *gateway) *store.Request {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rows, err := g.store.Requests(store.RequestFilter{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 1 {
+			return &rows[0]
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no log row")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func deref[T any](p *T) any {
 	if p == nil {
 		return nil
@@ -1587,22 +1607,7 @@ routes:
 		t.Fatalf("client received %q (%v)", got, err)
 	}
 
-	var row *store.Request
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		rows, err := g.store.Requests(store.RequestFilter{Limit: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(rows) == 1 {
-			row = &rows[0]
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no log row")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	row := onlyRow(t, g)
 	if row.Status != 499 || row.Outcome != "client_cancelled" || gjson.Get(row.AttemptLog, "0.status").Int() != 503 {
 		t.Errorf("row: status %d, outcome %s, attempt_log %s", row.Status, row.Outcome, row.AttemptLog)
 	}
@@ -1833,5 +1838,134 @@ affinity:
 	}
 	if got := send("T"); got != `{"from":"b"}` {
 		t.Errorf("new session after reload: %s, want the new order", got)
+	}
+}
+
+// A target whose request cannot be built is a failed attempt that does not
+// touch the breaker, and the loop moves on (docs/routing.md).
+func TestUnbuildableTargetFailsOver(t *testing.T) {
+	a := newUpstream(t, reply(200, `{"from":"a"}`))
+	b := newUpstream(t, reply(200, `{"from":"b"}`))
+	g := newGateway(t, "providers:\n"+
+		prov("a", "chat", a.URL, "overrides:", "  - set: {path: extra.flags, value: 1}")+
+		prov("b", "chat", b.URL)+`
+routes:
+  - model: m
+    targets: [{provider: a}, {provider: b, priority: 2}]
+breaker:
+  failure_threshold: 1
+`)
+	// The override cannot set an object key inside an array.
+	res := g.post(t, "/v1/chat/completions", `{"model":"m","extra":[1],"messages":[]}`)
+	if res.status != 200 || res.body != `{"from":"b"}` || a.count() != 0 {
+		t.Fatalf("got %d %s, a received %d requests", res.status, res.body, a.count())
+	}
+	row := g.row(t, res.rid)
+	if row.Attempts != 2 || deref(row.Provider) != "b" || !strings.HasPrefix(gjson.Get(row.AttemptLog, "0.error").Str, "build request: ") {
+		t.Errorf("attempts = %d, provider = %v, attempt_log = %s", row.Attempts, deref(row.Provider), row.AttemptLog)
+	}
+	if st := g.h.rt.Load().breakers.State("a.chat"); st.State != "closed" || st.Failures != 0 {
+		t.Errorf("breaker of a = %+v, want untouched", st)
+	}
+}
+
+// A client that leaves while the gateway waits for response headers ends the
+// request as 499 client_cancelled; it says nothing about the provider, so
+// the breaker is not fed (docs/architecture.md).
+func TestClientCancelWaitingForHeaders(t *testing.T) {
+	up := newUpstream(t, func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	g := newGateway(t, "providers:\n"+prov("a", "chat", up.URL)+`
+routes:
+  - model: m
+    targets: [{provider: a}]
+breaker:
+  failure_threshold: 1
+`)
+	conn, err := net.Dial("tcp", g.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s", len(chatBody), chatBody)
+	deadline := time.Now().Add(5 * time.Second)
+	for up.count() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the request never reached the upstream")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	conn.(*net.TCPConn).CloseWrite() // the server sees the client leave
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if got, err := io.ReadAll(conn); len(got) != 0 {
+		t.Fatalf("client received %q (%v)", got, err)
+	}
+
+	row := onlyRow(t, g)
+	if row.Status != 499 || row.Outcome != "client_cancelled" || gjson.Get(row.AttemptLog, "0.error").Str != "client cancelled" {
+		t.Errorf("row: status %d, outcome %s, attempt_log %s", row.Status, row.Outcome, row.AttemptLog)
+	}
+	if st := g.h.rt.Load().breakers.State("a.chat"); st.State != "closed" || st.Failures != 0 {
+		t.Errorf("breaker of a = %+v, want untouched", st)
+	}
+}
+
+// The last failed response is returned as far as it was buffered; a body
+// over the limit is cut there, and the client must not take it for whole
+// (docs/routing.md).
+func TestExhaustionCutsOversizedBody(t *testing.T) {
+	a := newUpstream(t, reply(503, strings.Repeat("x", maxErrorBody+1024)))
+	g := newGateway(t, "providers:\n"+prov("a", "chat", a.URL)+`
+routes:
+  - model: m
+    targets: [{provider: a}]
+`)
+	res := g.post(t, "/v1/chat/completions", chatBody)
+	if res.status != 503 || res.err == nil || len(res.body) > maxErrorBody {
+		t.Fatalf("got %d, %d body bytes, read error %v; want 503 and a cut body", res.status, len(res.body), res.err)
+	}
+	if row := g.row(t, res.rid); row.Status != 503 || row.Outcome != "truncated" {
+		t.Errorf("row: status %d, outcome %s", row.Status, row.Outcome)
+	}
+}
+
+// A continuation goes to the recorded owner even when the matched route no
+// longer lists it, and is refused once the owner's provider has no endpoint
+// for the protocol (docs/affinity.md).
+func TestOwnerAcrossReloads(t *testing.T) {
+	a := newUpstream(t, reply(200, `{"id":"resp_a","object":"response","usage":{"input_tokens":1,"output_tokens":1}}`))
+	b := newUpstream(t, reply(200, `{"id":"resp_b","object":"response","usage":{"input_tokens":1,"output_tokens":1}}`))
+	g := newGateway(t, "providers:\n"+prov("a", "responses", a.URL)+prov("b", "responses", b.URL)+`
+routes:
+  - model: m
+    targets: [{provider: a}, {provider: b, priority: 2}]
+`)
+	if res := g.post(t, "/v1/responses", `{"model":"m","input":"hi"}`); res.status != 200 || a.count() != 1 {
+		t.Fatalf("got %d, a received %d requests", res.status, a.count())
+	}
+	reload := func(providers string) {
+		t.Helper()
+		cfg, _, err := config.Parse([]byte("providers:\n"+providers+`
+routes:
+  - model: m
+    targets: [{provider: b}]
+`), "next.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.h.SetConfig(cfg, models.New(cfg, time.Minute, time.Second))
+	}
+	const next = `{"model":"m","previous_response_id":"resp_a","input":"more"}`
+
+	// The route now lists only b; a still serves the protocol.
+	reload(prov("a", "responses", a.URL) + prov("b", "responses", b.URL))
+	if res := g.post(t, "/v1/responses", next); res.status != 200 || a.count() != 2 || b.count() != 0 {
+		t.Fatalf("owner off the route: got %d, a %d, b %d", res.status, a.count(), b.count())
+	}
+
+	// a now has only a chat endpoint.
+	reload(prov("a", "chat", a.URL) + prov("b", "responses", b.URL))
+	res := g.post(t, "/v1/responses", next)
+	if res.status != 404 || res.header.Get("X-Verbatim-Error") != "unknown_response_id" || a.count() != 2 || b.count() != 0 {
+		t.Fatalf("owner without the endpoint: got %d %v, a %d, b %d", res.status, res.header, a.count(), b.count())
 	}
 }
