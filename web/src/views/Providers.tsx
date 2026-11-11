@@ -134,15 +134,16 @@ function Breaker({ b, now }: { b: EndpointView["breaker"]; now: number }) {
   return <Mark tone="ok">closed</Mark>
 }
 
-// useNow ticks every second while a countdown is visible.
+// useNow returns the current time and re-renders every second while a
+// countdown is visible.
 function useNow(ticking: boolean): number {
-  const [now, setNow] = useState(Date.now)
+  const [, tick] = useState(0)
   useEffect(() => {
     if (!ticking) return
-    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    const t = window.setInterval(() => tick((n) => n + 1), 1000)
     return () => window.clearInterval(t)
   }, [ticking])
-  return ticking ? now : Date.now()
+  return Date.now()
 }
 
 // ConfigSection shows the configuration being served and reloads it from

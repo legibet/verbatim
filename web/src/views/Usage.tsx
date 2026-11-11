@@ -65,7 +65,7 @@ export function Usage() {
         <>
           <Totals t={data.total} />
 
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <DayChart
               title="Cost per day"
               unit="USD, UTC days"
@@ -135,7 +135,7 @@ function Totals({ t }: { t: Aggregate }) {
     { label: "Cache write", value: fmtInt(t.cache_write_tokens) },
     { label: "Output", value: fmtInt(t.output_tokens) },
     { label: "Reasoning", value: fmtInt(t.reasoning_tokens) },
-    { label: "Cost", value: `$${fmtUSD(t.cost_usd)}` },
+    { label: "Cost", value: t.requests - t.unpriced - t.no_usage > 0 ? `$${fmtUSD(t.cost_usd)}` : <Dash /> },
   ]
   return (
     <div>

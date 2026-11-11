@@ -126,12 +126,16 @@ export function Requests({ active, openId }: { active: boolean; openId: number |
     }
   }, [base, keyVersion])
 
-  // Coming back to this view reloads with a fresh time range.
+  // Coming back to this view reloads with a fresh time range, and picks up
+  // provider and route names from a configuration reloaded meanwhile.
   const wasActive = useRef(active)
   useEffect(() => {
-    if (active && !wasActive.current) setReloadTick((n) => n + 1)
+    if (active && !wasActive.current) {
+      setReloadTick((n) => n + 1)
+      config.reload()
+    }
     wasActive.current = active
-  }, [active])
+  }, [active, config.reload])
 
   // Live tail: poll for rows newer than the newest one shown.
   const newest = rows[0]?.id ?? 0
@@ -142,19 +146,19 @@ export function Requests({ active, openId }: { active: boolean; openId: number |
     const ctl = new AbortController()
     let timer: number | undefined
     const poll = async () => {
-      if (newestRef.current === 0) {
-        setReloadTick((n) => n + 1)
-        return
-      }
+      // An empty table has no newest row to read after, so it asks for the
+      // first page, which comes newest first and with a cursor.
+      const after = newestRef.current
       try {
         const page = await getJSON(
-          `requests${query({ ...base, after: String(newestRef.current), limit: "1000" })}`,
+          `requests${query(after ? { ...base, after: String(after), limit: "1000" } : { ...base, limit: String(PAGE) })}`,
           isRequestsPage,
           ctl.signal,
         )
         if (page.rows.length > 0) {
-          const fresh = [...page.rows].reverse() // the tail returns oldest first
+          const fresh = after ? [...page.rows].reverse() : page.rows // the tail returns oldest first
           setRows((rs) => [...fresh.filter((r) => r.id > (rs[0]?.id ?? 0)), ...rs])
+          if (!after) setNextBefore(page.next_before)
           setArrived(new Set(fresh.map((r) => r.id)))
         }
       } catch (e) {
@@ -233,7 +237,7 @@ export function Requests({ active, openId }: { active: boolean; openId: number |
           <Button variant="ghost" onClick={() => setReloadTick((n) => n + 1)}>
             Refresh
           </Button>
-          <ToggleButton pressed={live && canLive} onChange={setLive}>
+          <ToggleButton pressed={live && canLive} onChange={setLive} disabled={!canLive}>
             <span
               aria-hidden
               className={cn("size-1.5 rounded-full", live && canLive ? "live-dot bg-ok" : "bg-faint")}

@@ -103,6 +103,8 @@ export function KeyPrompt() {
 
 export function CopyButton({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState(false)
+  // Browsers offer the clipboard only on HTTPS and localhost.
+  if (!navigator.clipboard) return null
   return (
     <Button
       variant="ghost"
@@ -110,10 +112,13 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
       aria-label={label}
       title={label}
       onClick={() => {
-        void navigator.clipboard?.writeText(text).then(() => {
-          setDone(true)
-          window.setTimeout(() => setDone(false), 1400)
-        })
+        void navigator.clipboard.writeText(text).then(
+          () => {
+            setDone(true)
+            window.setTimeout(() => setDone(false), 1400)
+          },
+          () => {},
+        )
       }}
     >
       {done ? <CheckIcon className="text-ok-ink" /> : <CopyIcon />}
@@ -209,16 +214,19 @@ export function RangePicker({
 export function ToggleButton({
   pressed,
   onChange,
+  disabled,
   children,
 }: {
   pressed: boolean
   onChange: (v: boolean) => void
+  disabled?: boolean
   children: ReactNode
 }) {
   return (
     <Button
       variant="outline"
       aria-pressed={pressed}
+      disabled={disabled}
       onClick={() => onChange(!pressed)}
       className="aria-pressed:border-foreground/40 aria-pressed:bg-muted"
     >
