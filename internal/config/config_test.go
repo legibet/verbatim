@@ -225,6 +225,20 @@ func TestFullExample(t *testing.T) {
 	}
 }
 
+// The annotated reference users copy must itself load without warnings.
+func TestShippedExample(t *testing.T) {
+	for _, v := range []string{"VERBATIM_KEY", "OPENAI_KEY", "ANTHROPIC_KEY", "MOONSHOT_KEY", "OPENROUTER_KEY", "RELAY_KEY", "DASHSCOPE_API_KEY"} {
+		t.Setenv(v, "secret-"+v)
+	}
+	data, err := os.ReadFile("../../verbatim.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, warns, err := Parse(data, "verbatim.example.yaml"); err != nil || len(warns) != 0 {
+		t.Fatalf("verbatim.example.yaml: err = %v, warnings = %v", err, warns)
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	cfg, warns := mustParse(t, minimal)
 	if len(warns) != 0 {

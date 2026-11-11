@@ -84,7 +84,8 @@ providers:
     <<: *openrouter                 # provider; the YAML merge copies key, headers, endpoints
     overrides:                      # static edits to every request body sent here,
                                     # applied in order, each attempt from the original
-                                    # client body. Paths are gjson/sjson paths.
+                                    # client body. Paths are plain dotted paths
+                                    # (a backslash escapes a dot).
       - set: {path: provider.quantizations, value: [fp32, bf16, fp16, fp8, mxfp4]}
 
   relay:                            # a third-party relay with quirks
@@ -199,8 +200,9 @@ affinity:
 
 # ---------------------------------------------------------------------------
 # breaker: one circuit breaker per provider endpoint. Only "the endpoint is
-# unhealthy" signals count: no response, 5xx, 529, 429. A 401/403/404 fails over this
-# request but does not count.
+# unhealthy" signals count: no response headers, 429, 500, 502, 503, 504, 529.
+# Every other failover status (401, 403, 404, 408, 409, 425, and those in
+# failover_on) fails over this request but does not count.
 # ---------------------------------------------------------------------------
 breaker:
   failure_threshold: 3              # default; consecutive counted failures to open
@@ -212,7 +214,7 @@ breaker:
 models:
   cache_ttl: 1h                     # default
   timeout: 10s                      # default; per fetch. Clients never wait on a refresh,
-                                    # only on the first round right after startup.
+                                    # only on the first round after startup or a reload.
 
 # ---------------------------------------------------------------------------
 # log: the SQLite request log (one row per request, no bodies).

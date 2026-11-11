@@ -52,7 +52,7 @@ The body of an abandoned attempt is read (bounded by `server.idle_timeout` and 1
 
 ## Circuit breaker
 
-One breaker per endpoint. Only signals that the endpoint as a whole is unhealthy count: no response headers, 429, 500, 502, 503, 504, 529. A 401, 403, 404, or `failover_on` status fails over this request without counting, because it is as likely to concern one model, one key's entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`). `count_tokens` and `search` never count, whatever their status.
+One breaker per endpoint. Only signals that the endpoint as a whole is unhealthy count: no response headers, 429, 500, 502, 503, 504, 529. A 401, 403, 404, or `failover_on` status fails over this request without counting, because it is as likely to concern one model, one key's entitlement, or one operation (Ollama serves Messages but not `count_tokens`; most relays do not serve `search`). A 408, 409, or 425 fails over without counting as well. `count_tokens` and `search` never count, whatever their status.
 
 `breaker.failure_threshold` consecutive counted failures open the breaker for `breaker.cooldown`. After the cooldown exactly one request is admitted (half-open). A committed primary response closes the breaker and resets the counter; a counted failure reopens it for another cooldown. Any other end of the probe (a non-counted status, a client cancel, an auxiliary operation) leaves the breaker open with its cooldown elapsed, so the next request probes again.
 
