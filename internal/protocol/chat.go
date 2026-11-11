@@ -44,7 +44,7 @@ func observeChat(st *usageState, _ string, obj gjson.Result) {
 		st.id = id.Str
 	}
 	st.set(obj.Get("usage"), func(u gjson.Result) Usage { return openAIUsage(u, "prompt", "completion") })
-	if obj.Get("error").Exists() {
+	if obj.Get("error").Type != gjson.Null {
 		st.errorEvent = true
 	}
 }

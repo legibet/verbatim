@@ -233,6 +233,13 @@ func TestStreamUsage(t *testing.T) {
 			errorEv: true,
 		},
 		{
+			name:   "chat null error field",
+			id:     Chat,
+			stream: "data: {\"id\":\"c1\",\"choices\":[],\"error\":null,\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n",
+			want:   "in=3 cr=- cw=- cw1h=- out=2 rs=-",
+			respID: "c1",
+		},
+		{
 			name:   "responses completed",
 			id:     Responses,
 			stream: responsesStream,

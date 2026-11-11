@@ -413,6 +413,19 @@ routes:
 	}
 }
 
+// A decompressor that panics on a malformed body costs that response its
+// usage and nothing else.
+func TestUsageTeeDecoderPanic(t *testing.T) {
+	tee := &usageTee{p: protocol.Lookup(protocol.Chat).NewUsageParser(protocol.Create, false)}
+	tee.in, tee.out, tee.done = make(chan []byte), make(chan []byte), make(chan struct{})
+	go tee.decode(func(io.Reader) (io.ReadCloser, error) { panic("malformed input") })
+	tee.write([]byte("x"))
+	tee.close()
+	if u, ok := tee.usage(); ok {
+		t.Errorf("usage = %+v, want none", u)
+	}
+}
+
 // A compressed Responses stream, flushed per event: usage is extracted and
 // the owner is recorded before the client has the bytes that reveal the id.
 func TestCompressedStreamUsageAndOwnership(t *testing.T) {

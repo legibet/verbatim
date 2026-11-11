@@ -94,9 +94,16 @@ func newUsageTee(p protocol.UsageParser, header http.Header) *usageTee {
 }
 
 // decode runs the decompressor until the body ends or turns out to be
-// corrupt; the parser keeps whatever it was fed before.
+// corrupt; the parser keeps whatever it was fed before. A decompressor that
+// panics on the upstream's bytes is treated as a corrupt body: this goroutine
+// is not the request's, so the panic would otherwise end the process.
 func (t *usageTee) decode(open func(io.Reader) (io.ReadCloser, error)) {
-	defer close(t.done)
+	defer func() {
+		if v := recover(); v != nil {
+			slog.Warn("usage decoder panicked; usage for this response is dropped", "panic", v)
+		}
+		close(t.done)
+	}()
 	r, err := open(&chunkReader{in: t.in, out: t.out})
 	if err != nil {
 		return
