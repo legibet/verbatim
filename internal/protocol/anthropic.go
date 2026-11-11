@@ -132,7 +132,7 @@ func observeAnthropicCount(st *usageState, _ string, obj gjson.Result) {
 	st.set(obj, func(u gjson.Result) Usage { return Usage{Input: num(u.Get("input_tokens"))} })
 }
 
-func (anthropicProtocol) ErrorBody(_ int, code, msg string) []byte {
+func (anthropicProtocol) ErrorBody(code, msg string) []byte {
 	type detail struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
@@ -143,5 +143,3 @@ func (anthropicProtocol) ErrorBody(_ int, code, msg string) []byte {
 	}{"error", detail{"api_error", code + ": " + msg}})
 	return b
 }
-
-func (anthropicProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }

@@ -89,6 +89,4 @@ func observeResponses(st *usageState, _ string, obj gjson.Result) {
 	}
 }
 
-func (responsesProtocol) ErrorBody(_ int, code, msg string) []byte { return openAIErrorBody(code, msg) }
-
-func (responsesProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }
+func (responsesProtocol) ErrorBody(code, msg string) []byte { return openAIErrorBody(code, msg) }

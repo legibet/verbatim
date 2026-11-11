@@ -36,7 +36,6 @@ const (
 type Cache struct {
 	cfg       *config.Config
 	routes    *route.Table
-	transport http.RoundTripper
 	ttl       time.Duration
 	timeout   time.Duration
 	endpoints []endpoint // endpoints discovery reads, sorted
@@ -57,11 +56,8 @@ type list struct {
 }
 
 // New returns a cache for cfg that fetches the endpoints of exact and
-// discovering routes. A nil transport means http.DefaultTransport.
-func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Duration) *Cache {
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
+// discovering routes.
+func New(cfg *config.Config, ttl, timeout time.Duration) *Cache {
 	need := map[endpoint]bool{}
 	for _, r := range cfg.Routes {
 		if !config.IsExact(r.Model) && !discovers(r) {
@@ -77,7 +73,6 @@ func New(cfg *config.Config, transport http.RoundTripper, ttl, timeout time.Dura
 	return &Cache{
 		cfg:       cfg,
 		routes:    route.New(cfg),
-		transport: transport,
 		ttl:       ttl,
 		timeout:   timeout,
 		endpoints: slices.SortedFunc(maps.Keys(need), func(a, b endpoint) int { return strings.Compare(a.name(), b.name()) }),
@@ -195,7 +190,7 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 		// decompressing the reply, and the list would arrive as encoded
 		// bytes; without it the transport negotiates and decodes on its own.
 		req.Header.Del("Accept-Encoding")
-		resp, err := c.transport.RoundTrip(req)
+		resp, err := http.DefaultTransport.RoundTrip(req)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", where, err)
 		}
@@ -207,7 +202,7 @@ func (c *Cache) fetch(ctx context.Context, e endpoint) ([]string, error) {
 		if resp.StatusCode/100 != 2 {
 			return nil, fmt.Errorf("%s: HTTP %d", where, resp.StatusCode)
 		}
-		ids, next := proto.ModelList(body)
+		ids, next := protocol.ModelList(body)
 		if ids == nil {
 			return nil, fmt.Errorf("%s: response is not a model list", where)
 		}

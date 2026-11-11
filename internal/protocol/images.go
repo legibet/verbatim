@@ -120,9 +120,7 @@ func imagesUsage(u gjson.Result, op Operation) Usage {
 	return r
 }
 
-func (imagesProtocol) ErrorBody(_ int, code, msg string) []byte { return openAIErrorBody(code, msg) }
-
-func (imagesProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }
+func (imagesProtocol) ErrorBody(code, msg string) []byte { return openAIErrorBody(code, msg) }
 
 // multipartBoundary returns the boundary of a multipart/form-data
 // Content-Type; ok is false for any other content type.

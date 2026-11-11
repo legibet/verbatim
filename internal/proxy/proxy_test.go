@@ -125,7 +125,7 @@ func newGateway(t *testing.T, yaml string, opts ...func(*Options)) *gateway {
 	t.Cleanup(func() { st.Close() })
 	o := Options{
 		Config: cfg,
-		Models: models.New(cfg, nil, time.Minute, time.Second),
+		Models: models.New(cfg, time.Minute, time.Second),
 		Pins:   affinity.NewPins(cfg.Affinity.TTL.Std(), 1000),
 		Store:  st,
 	}
@@ -1493,7 +1493,7 @@ routes:
 		t.Fatalf("got %d %v %s", res.status, res.header, res.body)
 	}
 	// The request still running keeps counting after a reload.
-	g.h.SetConfig(g.cfg, models.New(g.cfg, nil, time.Minute, time.Second))
+	g.h.SetConfig(g.cfg, models.New(g.cfg, time.Minute, time.Second))
 	if res := g.post(t, "/v1/messages", `{"model":"m"}`); res.status != 503 {
 		t.Fatalf("after reload: got %d %s", res.status, res.body)
 	}
@@ -1792,7 +1792,7 @@ affinity:
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.h.SetConfig(cfg, models.New(cfg, nil, time.Minute, time.Second))
+	g.h.SetConfig(cfg, models.New(cfg, time.Minute, time.Second))
 
 	if res := g.post(t, "/v1/chat/completions", chatBody, "X-Session-Affinity", "S"); res.status != 401 {
 		t.Errorf("without the new key: %d", res.status)

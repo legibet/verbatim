@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/textproto"
@@ -303,7 +304,6 @@ type failedResponse struct {
 // each candidate once, the breaker checked at dispatch, failover decided on
 // the status line, and the first other response committed.
 func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
-	h := x.h
 	var last *failedResponse // response of the last attempt, nil if it had none
 	var failures []string    // "provider: error" for the 502 message
 	for _, c := range order {
@@ -347,7 +347,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 			a.Error = err.Error()
 			x.attempts = append(x.attempts, a)
 			x.verdict(endpoint, probe, true)
-			h.log.Warn("upstream request failed", "provider", c.Provider, "url", req.URL.Redacted(),
+			slog.Warn("upstream request failed", "provider", c.Provider, "url", req.URL.Redacted(),
 				"err", err, "request_id", x.row.RequestID)
 			failures = append(failures, c.Provider+": "+err.Error())
 			last = nil
@@ -375,7 +375,7 @@ func (x *exchange) attemptAll(body []byte, order []route.Candidate) {
 		failures = append(failures, fmt.Sprintf("%s: HTTP %d", c.Provider, resp.StatusCode))
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-			h.log.Warn("upstream refused the request; check the provider's key, base_url and model name",
+			slog.Warn("upstream refused the request; check the provider's key, base_url and model name",
 				"provider", c.Provider, "url", req.URL.Redacted(), "upstream_model", c.Model, "status", resp.StatusCode,
 				"request_id", x.row.RequestID)
 		}
@@ -619,7 +619,7 @@ func (x *exchange) commit(resp *http.Response, c route.Candidate) {
 		if id := tee.responseID(); id != "" {
 			needOwner = false
 			if err := h.store.RecordOwner(id, c.Provider, c.Model); err != nil {
-				h.log.Warn("response ownership not recorded", "request_id", x.row.RequestID, "err", err)
+				slog.Warn("response ownership not recorded", "request_id", x.row.RequestID, "err", err)
 			}
 		}
 	}
@@ -756,7 +756,7 @@ func (x *exchange) record() {
 	attempts, _ := json.Marshal(x.attempts)
 	x.row.RoutingJSON, x.row.AttemptLog = string(routing), string(attempts)
 	x.h.store.Record(&x.row)
-	x.h.log.Debug("request", "request_id", x.row.RequestID, "protocol", x.row.Protocol, "model", x.row.ClientModel,
+	slog.Debug("request", "request_id", x.row.RequestID, "protocol", x.row.Protocol, "model", x.row.ClientModel,
 		"status", x.row.Status, "outcome", x.row.Outcome, "attempts", x.row.Attempts, "total_ms", x.row.TotalMS)
 }
 

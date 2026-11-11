@@ -5,10 +5,8 @@
 package proxy
 
 import (
-	"cmp"
 	"crypto/subtle"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -31,7 +29,6 @@ type Options struct {
 	Pins    *affinity.Pins
 	Store   *store.Store
 	Pricing *pricing.Table // initial table; SetPricing replaces it; nil prices nothing
-	Logger  *slog.Logger   // nil means slog.Default()
 }
 
 // Handler serves the data plane: the protocol entry points, the model
@@ -42,7 +39,6 @@ type Handler struct {
 	pins    *affinity.Pins
 	store   *store.Store
 	pricing atomic.Pointer[pricing.Table]
-	log     *slog.Logger
 	// inflight counts forwarded requests against server.max_inflight. It
 	// lives here rather than in the runtime so that requests still running
 	// after a reload keep counting.
@@ -71,7 +67,6 @@ func New(o Options) *Handler {
 	h := &Handler{
 		pins:  o.Pins,
 		store: o.Store,
-		log:   cmp.Or(o.Logger, slog.Default()),
 		mux:   http.NewServeMux(),
 	}
 	h.SetConfig(o.Config, o.Models)
@@ -244,7 +239,7 @@ func writeError(w http.ResponseWriter, p protocol.Protocol, status int, code, ms
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Verbatim-Error", code)
 	w.WriteHeader(status)
-	w.Write(p.ErrorBody(status, code, msg))
+	w.Write(p.ErrorBody(code, msg))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

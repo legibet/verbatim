@@ -586,7 +586,7 @@ routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	mc := models.New(cfg, nil, time.Hour, 5*time.Second)
+	mc := models.New(cfg, time.Hour, 5*time.Second)
 	h := New(Options{
 		Store:   newStore(t, nil),
 		Stats:   func() proxy.Stats { return proxy.Stats{} },

@@ -95,7 +95,7 @@ routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(cfg, nil, time.Minute, time.Second)
+	c := New(cfg, time.Minute, time.Second)
 	var fetched []string
 	for _, e := range c.endpoints {
 		fetched = append(fetched, e.name())
@@ -196,7 +196,7 @@ routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(cfg, nil, time.Minute, time.Second)
+	c := New(cfg, time.Minute, time.Second)
 	ctx := t.Context()
 	c.Start(ctx)
 	// Names called right after Start waits for the first fetch.
@@ -218,7 +218,7 @@ routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(cfg, nil, time.Minute, time.Second)
+	c := New(cfg, time.Minute, time.Second)
 	if err := c.refresh(context.Background(), endpoint{"p", "chat"}); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(cfg, nil, time.Minute, time.Second)
+	c := New(cfg, time.Minute, time.Second)
 	if err := c.refresh(context.Background(), endpoint{"p", "chat"}); err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ routes:
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	// A TTL this short retries a failed fetch every 5ms.
-	c := New(cfg, nil, 5*time.Millisecond, time.Second)
+	c := New(cfg, 5*time.Millisecond, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// await waits until the provider has served n more requests. A fetch logs

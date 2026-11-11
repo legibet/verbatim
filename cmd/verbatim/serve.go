@@ -82,7 +82,6 @@ func runServer(path string) error {
 		Pins:    affinity.NewPins(cfg.Affinity.TTL.Std(), maxPins),
 		Store:   st,
 		Pricing: prices,
-		Logger:  slog.Default(),
 	})
 	// The watcher, a price sync from the UI and a configuration reload all
 	// reload the table; one lock around loading and installing keeps an
@@ -202,7 +201,7 @@ func runServer(path string) error {
 }
 
 func newModels(cfg *config.Config) *models.Cache {
-	return models.New(cfg, http.DefaultTransport, cfg.Models.CacheTTL.Std(), cfg.Models.Timeout.Std())
+	return models.New(cfg, cfg.Models.CacheTTL.Std(), cfg.Models.Timeout.Std())
 }
 
 // restartOnly names the settings changed from old to next that a running

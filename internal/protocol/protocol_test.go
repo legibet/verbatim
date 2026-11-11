@@ -295,18 +295,17 @@ func TestContinuationRef(t *testing.T) {
 
 func TestErrorBody(t *testing.T) {
 	tests := []struct {
-		id     ID
-		status int
-		code   string
-		want   string
+		id   ID
+		code string
+		want string
 	}{
-		{Chat, 404, "no_route", `{"error":{"message":"no route for \"x\"","type":"verbatim_error","code":"no_route"}}`},
-		{Responses, 404, "no_route", `{"error":{"message":"no route for \"x\"","type":"verbatim_error","code":"no_route"}}`},
-		{Anthropic, 404, "no_route", `{"type":"error","error":{"type":"api_error","message":"no_route: no route for \"x\""}}`},
+		{Chat, "no_route", `{"error":{"message":"no route for \"x\"","type":"verbatim_error","code":"no_route"}}`},
+		{Responses, "no_route", `{"error":{"message":"no route for \"x\"","type":"verbatim_error","code":"no_route"}}`},
+		{Anthropic, "no_route", `{"type":"error","error":{"type":"api_error","message":"no_route: no route for \"x\""}}`},
 	}
 	for _, tt := range tests {
-		if got := string(Lookup(tt.id).ErrorBody(tt.status, tt.code, `no route for "x"`)); got != tt.want {
-			t.Errorf("%s ErrorBody(%d) =\n %s\nwant\n %s", tt.id, tt.status, got, tt.want)
+		if got := string(Lookup(tt.id).ErrorBody(tt.code, `no route for "x"`)); got != tt.want {
+			t.Errorf("%s ErrorBody =\n %s\nwant\n %s", tt.id, got, tt.want)
 		}
 	}
 }
@@ -333,51 +332,45 @@ func TestModelsPath(t *testing.T) {
 func TestModelList(t *testing.T) {
 	tests := []struct {
 		name string
-		id   ID
 		body string
 		ids  []string
 		next string
 	}{
 		{
 			name: "openai",
-			id:   Chat,
 			body: `{"object":"list","data":[{"id":"gpt-5.6","object":"model","created":1686935002,"owned_by":"openai"},{"id":"gpt-5.6-mini","object":"model","created":1686935002,"owned_by":"openai"}]}`,
 			ids:  []string{"gpt-5.6", "gpt-5.6-mini"},
 		},
 		{
 			name: "openai-compatible page",
-			id:   Responses,
 			body: `{"data":[{"id":"a"},{"id":""},{"id":3}],"has_more":true,"last_id":"a"}`,
 			ids:  []string{"a"},
 			next: "a",
 		},
 		{
 			name: "chat has_more without last_id",
-			id:   Chat,
 			body: `{"data":[{"id":"x"}],"has_more":true,"last_id":""}`,
 			ids:  []string{"x"},
 		},
 		{
 			name: "anthropic page",
-			id:   Anthropic,
 			body: `{"data":[{"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5","created_at":"2026-03-01T00:00:00Z"},{"type":"model","id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5","created_at":"2026-03-01T00:00:00Z"}],"has_more":true,"first_id":"claude-opus-5-5","last_id":"claude-sonnet-5-5"}`,
 			ids:  []string{"claude-opus-5-5", "claude-sonnet-5-5"},
 			next: "claude-sonnet-5-5",
 		},
 		{
 			name: "anthropic last page",
-			id:   Anthropic,
 			body: `{"data":[{"type":"model","id":"claude-haiku-5-5"}],"has_more":false,"first_id":"claude-haiku-5-5","last_id":"claude-haiku-5-5"}`,
 			ids:  []string{"claude-haiku-5-5"},
 		},
-		{name: "empty list", id: Chat, body: `{"object":"list","data":[]}`, ids: []string{}},
-		{name: "not a list", id: Chat, body: `{"error":{"message":"bad key"}}`},
-		{name: "truncated", id: Anthropic, body: `{"data":[{"id":"a"}`},
-		{name: "html", id: Chat, body: `<html>502</html>`},
+		{name: "empty list", body: `{"object":"list","data":[]}`, ids: []string{}},
+		{name: "not a list", body: `{"error":{"message":"bad key"}}`},
+		{name: "truncated", body: `{"data":[{"id":"a"}`},
+		{name: "html", body: `<html>502</html>`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ids, next := Lookup(tt.id).ModelList([]byte(tt.body))
+			ids, next := ModelList([]byte(tt.body))
 			if !slices.Equal(ids, tt.ids) || (ids == nil) != (tt.ids == nil) || next != tt.next {
 				t.Fatalf("got %#v, %q; want %#v, %q", ids, next, tt.ids, tt.next)
 			}

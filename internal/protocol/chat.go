@@ -86,7 +86,7 @@ func valueOr0(p *int64) int64 {
 	return *p
 }
 
-func (chatProtocol) ErrorBody(_ int, code, msg string) []byte { return openAIErrorBody(code, msg) }
+func (chatProtocol) ErrorBody(code, msg string) []byte { return openAIErrorBody(code, msg) }
 
 // openAIErrorBody is the error shape of Chat Completions and Responses.
 func openAIErrorBody(code, msg string) []byte {
@@ -100,5 +100,3 @@ func openAIErrorBody(code, msg string) []byte {
 	}{detail{msg, "verbatim_error", code}})
 	return b
 }
-
-func (chatProtocol) ModelList(body []byte) ([]string, string) { return dataModelList(body) }

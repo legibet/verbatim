@@ -97,10 +97,7 @@ type Protocol interface {
 	NewUsageParser(op Operation, stream bool) UsageParser
 	// ErrorBody renders a verbatim-generated error in the native shape
 	// (docs/forwarding.md).
-	ErrorBody(status int, code, msg string) []byte
-	// ModelList parses one page of the model list. next is the cursor for
-	// the following page, empty on the last one.
-	ModelList(body []byte) (ids []string, next string)
+	ErrorBody(code, msg string) []byte
 }
 
 // All lists the protocols verbatim serves, in a fixed order.

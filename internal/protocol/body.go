@@ -81,11 +81,11 @@ func openAIModelsPath(after string) string {
 	return "/models?after_id=" + url.QueryEscape(after)
 }
 
-// dataModelList reads an OpenAI- or Anthropic-style model list page: ids from
-// data[].id, and as the next cursor the last_id when has_more is true
+// ModelList reads one page of an OpenAI- or Anthropic-style model list: ids
+// from data[].id, and as the next cursor the last_id when has_more is true
 // (Anthropic always pages, OpenAI-compatible relays sometimes). ids is nil
 // when the body is not such a list, and non-nil (possibly empty) when it is.
-func dataModelList(body []byte) (ids []string, next string) {
+func ModelList(body []byte) (ids []string, next string) {
 	if !gjson.ValidBytes(body) {
 		return nil, ""
 	}
