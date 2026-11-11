@@ -39,7 +39,7 @@ client request
   → first route whose pattern matches the model and that has a target serving
     this protocol (404 no_route)
   → candidates = that route's targets for this protocol
-  → previous_response_id / conversation: the owning target is the only candidate
+  → previous_response_id: the owning target is the only candidate
   → affinity: look up or reserve a pin
   → attempt order: priority tiers, balance within a tier, pinned target first
   → for each candidate:

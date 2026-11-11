@@ -37,9 +37,11 @@ Pins live in memory with LRU eviction and `affinity.ttl` expiry, refreshed on ev
 
 ## Response ownership
 
-A Responses client can continue a conversation by reference instead of replaying it: `previous_response_id`, or a `conversation` id. That state exists only on the upstream that produced it, and no session key can identify it because the id is new on every turn. So verbatim records the id of every committed 2xx Responses `create` response (the response object's `id`; for streams, the first event carrying the response object) with the target that produced it, in the SQLite table `owned_responses`. The row is written synchronously, as soon as the id is seen and before those bytes reach the client, so a client cannot continue from an id verbatim has not yet recorded.
+A Responses client can continue a conversation by reference instead of replaying it, with `previous_response_id`. That state exists only on the upstream that produced it, and no session key can identify it because the id is new on every turn. So verbatim records the id of every committed 2xx Responses `create` response (the response object's `id`; for streams, the first event carrying the response object) with the target that produced it, in the SQLite table `owned_responses`. The row is written synchronously, as soon as the id is seen and before those bytes reach the client, so a client cannot continue from an id verbatim has not yet recorded.
 
-A request that carries `previous_response_id` or `conversation` has its owner as the only candidate, and pins are neither looked up nor moved. The owner need not still be a target of the matched route, but its provider must still have an endpoint for the protocol; otherwise, and for an unknown id, the answer is 404 `unknown_response_id` rather than a guess. The owner's breaker still applies. Ownership rows follow `log.retention`.
+A request that carries `previous_response_id` has its owner as the only candidate, and pins are neither looked up nor moved. The owner need not still be a target of the matched route, but its provider must still have an endpoint for the protocol; otherwise, and for an unknown id, the answer is 404 `unknown_response_id` rather than a guess. The owner's breaker still applies. Ownership rows follow `log.retention`.
+
+A `conversation` id is not such a reference. Conversations are created through the Conversations API, which verbatim does not serve, so it has no record of which upstream holds one. A request that carries `conversation` is routed like any other, and session affinity is what keeps it on one upstream.
 
 This is the one place verbatim keeps state beyond a cache. Any gateway that serves more than one Responses upstream needs it.
 

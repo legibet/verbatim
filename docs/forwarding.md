@@ -90,7 +90,7 @@ Errors verbatim generates itself use the inbound protocol's native shape so SDKs
 | `unauthenticated` | 401 | client key missing or wrong |
 | `no_model` | 400 | body has no string `model` |
 | `no_route` | 404 | no route serves this model and protocol |
-| `unknown_response_id` | 404 | `previous_response_id` or `conversation` has no recorded owner, or the owner's provider no longer serves the protocol |
+| `unknown_response_id` | 404 | `previous_response_id` has no recorded owner, or the owner's provider no longer serves the protocol |
 | `unsupported_operation` | 404 | Responses resource operations, WebSocket |
 | `body_too_large` | 413 | above `server.max_body_bytes` |
 | `too_many_inflight` | 503 | above `server.max_inflight` |

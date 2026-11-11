@@ -1274,9 +1274,14 @@ routes:
 	if o := gjson.Get(g.row(t, res.rid).RoutingJSON, "owner"); o.Get("id").Str != "resp_b" || o.Get("provider").Str != "b" {
 		t.Errorf("routing owner = %s", o.Raw)
 	}
-	res = g.post(t, "/v1/responses", `{"model":"m","conversation":{"id":"resp_a"},"input":"more"}`)
+	// A conversation id names state verbatim never saw created, so the request
+	// is routed like any other: to a, the first target, with no owner.
+	res = g.post(t, "/v1/responses", `{"model":"m","conversation":"conv_1","input":"more"}`)
 	if res.status != 200 || a.count() != aBefore+1 {
-		t.Fatalf("conversation not sent to its owner: %d", res.status)
+		t.Fatalf("conversation request: status %d, a got %d requests", res.status, a.count()-aBefore)
+	}
+	if o := gjson.Get(g.row(t, res.rid).RoutingJSON, "owner"); o.Type != gjson.Null {
+		t.Errorf("routing owner = %s, want none", o.Raw)
 	}
 
 	res = g.post(t, "/v1/responses", `{"model":"m","previous_response_id":"resp_unknown","input":"x"}`)

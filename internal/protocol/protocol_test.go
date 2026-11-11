@@ -272,12 +272,11 @@ func TestContinuationRef(t *testing.T) {
 	}{
 		{`{"previous_response_id":"resp_abc","input":"x"}`, "resp_abc"},
 		{`{"previous_response_id":"resp_abc","conversation":"conv_1"}`, "resp_abc"},
-		{`{"conversation":"conv_1"}`, "conv_1"},
-		{`{"conversation":{"id":"conv_2"}}`, "conv_2"},
-		{`{"previous_response_id":null,"conversation":{"id":"conv_2"}}`, "conv_2"},
 		{`{"previous_response_id":""}`, ""},
-		{`{"conversation":{}}`, ""},
-		{`{"conversation":7}`, ""},
+		{`{"previous_response_id":null}`, ""},
+		// A conversation is not a reference verbatim can resolve.
+		{`{"conversation":"conv_1"}`, ""},
+		{`{"conversation":{"id":"conv_2"}}`, ""},
 		{`{"input":"x"}`, ""},
 	}
 	for _, tt := range tests {

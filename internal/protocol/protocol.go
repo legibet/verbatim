@@ -92,7 +92,7 @@ type Protocol interface {
 	// message.
 	PrefixForHash(body []byte) (prefix []byte, ok bool)
 	// ContinuationRef returns a server-side state reference the request
-	// continues from (Responses previous_response_id or conversation).
+	// continues from (Responses previous_response_id).
 	ContinuationRef(body []byte) (id string, ok bool)
 	NewUsageParser(op Operation, stream bool) UsageParser
 	// ErrorBody renders a verbatim-generated error in the native shape

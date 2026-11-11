@@ -44,18 +44,12 @@ func (responsesProtocol) PrefixForHash(body []byte) ([]byte, bool) {
 	return hashPrefix(Responses, gjson.GetBytes(body, "instructions"), user)
 }
 
-// ContinuationRef returns previous_response_id, else the conversation id
-// ("conversation" is either the id string or an object carrying "id").
+// ContinuationRef returns previous_response_id. A conversation id is not
+// one: conversations are created through an API verbatim does not serve, so
+// it has no record of which upstream holds one (docs/affinity.md).
 func (responsesProtocol) ContinuationRef(body []byte) (string, bool) {
 	if prev := gjson.GetBytes(body, "previous_response_id"); prev.Type == gjson.String && prev.Str != "" {
 		return prev.Str, true
-	}
-	conv := gjson.GetBytes(body, "conversation")
-	if conv.IsObject() {
-		conv = conv.Get("id")
-	}
-	if conv.Type == gjson.String && conv.Str != "" {
-		return conv.Str, true
 	}
 	return "", false
 }
