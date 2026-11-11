@@ -204,3 +204,22 @@ func TestBreakerStaleFailureLeavesProbeAlone(t *testing.T) {
 		t.Fatalf("state after probe success = %q", st.State)
 	}
 }
+
+// An attempt admitted while the breaker was closed commits during a probe
+// and closes the breaker. The probe's failure is then one ordinary failure.
+func TestBreakerProbeFailureAfterSuccess(t *testing.T) {
+	b := NewBreakers(2, time.Second)
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	b.Failure("p", false)
+	b.Failure("p", false) // opens
+	now = now.Add(2 * time.Second)
+	if ok, probe := b.Admit("p"); !ok || !probe {
+		t.Fatal("expected the probe to be admitted")
+	}
+	b.Success("p") // the earlier attempt commits
+	b.Failure("p", true)
+	if st := b.State("p"); st.State != "closed" || st.Failures != 1 {
+		t.Fatalf("state = %+v, want closed with 1 failure", st)
+	}
+}

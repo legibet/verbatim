@@ -88,14 +88,15 @@ func (b *Breakers) Success(endpoint string) {
 // reaches the threshold. probe is the flag Admit returned for this attempt:
 // the probe's failure reopens the breaker for another cooldown, while a
 // failure of an attempt admitted earlier only counts and leaves the probe
-// in flight alone.
+// in flight alone. A probe whose breaker a Success has closed meanwhile
+// counts like any other failure.
 func (b *Breakers) Failure(endpoint string, probe bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	br := b.get(endpoint)
 	br.failures++
 	switch {
-	case probe:
+	case probe && br.probing:
 		br.probing = false
 		br.openUntil = b.now().Add(b.cooldown)
 	case br.openUntil.IsZero() && br.failures >= b.threshold:

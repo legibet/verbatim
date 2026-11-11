@@ -549,11 +549,20 @@ const noAffinity = "affinity:\n  fallback: none\n"
 const chatBody = `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
 
 func TestFailoverStatuses(t *testing.T) {
-	for _, status := range []int{401, 403, 404, 408, 409, 425, 429, 500, 502, 503, 504, 529} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			a := newUpstream(t, reply(status, `{"error":"a failed"}`))
+	// With a threshold of 1, a status that feeds the breaker opens it.
+	const oneFailure = "breaker:\n  failure_threshold: 1\n"
+	breakerState := func(g *gateway) string { return g.h.rt.Load().breakers.State("a.chat").State }
+	for _, tt := range []struct {
+		status  int
+		counted bool
+	}{
+		{401, false}, {403, false}, {404, false}, {408, false}, {409, false}, {425, false},
+		{429, true}, {500, true}, {502, true}, {503, true}, {504, true}, {529, true},
+	} {
+		t.Run(fmt.Sprint(tt.status), func(t *testing.T) {
+			a := newUpstream(t, reply(tt.status, `{"error":"a failed"}`))
 			b := newUpstream(t, reply(200, `{"ok":"b"}`))
-			g := newGateway(t, twoTargets(a.URL, b.URL, ""))
+			g := newGateway(t, twoTargets(a.URL, b.URL, oneFailure))
 			res := g.post(t, "/v1/chat/completions", chatBody)
 			if res.status != 200 || res.body != `{"ok":"b"}` {
 				t.Fatalf("got %d %s", res.status, res.body)
@@ -565,7 +574,7 @@ func TestFailoverStatuses(t *testing.T) {
 			if row.Attempts != 2 || deref(row.Provider) != "b" {
 				t.Errorf("attempts = %d, provider = %v", row.Attempts, deref(row.Provider))
 			}
-			if s := gjson.Get(row.AttemptLog, "0.status").Int(); s != int64(status) {
+			if s := gjson.Get(row.AttemptLog, "0.status").Int(); s != int64(tt.status) {
 				t.Errorf("attempt_log[0].status = %d", s)
 			}
 			if ex := gjson.Get(row.AttemptLog, "0.excerpt").Str; ex != `{"error":"a failed"}` {
@@ -574,18 +583,28 @@ func TestFailoverStatuses(t *testing.T) {
 			if row.AttemptsMS != gjson.Get(row.AttemptLog, "0.ms").Int() {
 				t.Errorf("attempts_ms = %d, attempt_log = %s", row.AttemptsMS, row.AttemptLog)
 			}
+			want := "closed"
+			if tt.counted {
+				want = "open"
+			}
+			if got := breakerState(g); got != want {
+				t.Errorf("breaker = %s, want %s", got, want)
+			}
 		})
 	}
 
 	t.Run("connect error", func(t *testing.T) {
 		b := newUpstream(t, reply(200, `{"ok":"b"}`))
-		g := newGateway(t, twoTargets(closedURL(), b.URL, ""))
+		g := newGateway(t, twoTargets(closedURL(), b.URL, oneFailure))
 		res := g.post(t, "/v1/chat/completions", chatBody)
 		if res.status != 200 {
 			t.Fatalf("got %d %s", res.status, res.body)
 		}
 		if row := g.row(t, res.rid); gjson.Get(row.AttemptLog, "0.error").Str == "" {
 			t.Errorf("attempt_log = %s", row.AttemptLog)
+		}
+		if got := breakerState(g); got != "open" {
+			t.Errorf("breaker = %s, want open: no response headers counts", got)
 		}
 	})
 
@@ -597,13 +616,16 @@ func TestFailoverStatuses(t *testing.T) {
 			}
 		})
 		b := newUpstream(t, reply(200, `{"ok":"b"}`))
-		g := newGateway(t, twoTargets(a.URL, b.URL, "server:\n  header_timeout: 100ms\n"))
+		g := newGateway(t, twoTargets(a.URL, b.URL, "server:\n  header_timeout: 100ms\n"+oneFailure))
 		res := g.post(t, "/v1/chat/completions", chatBody)
 		if res.status != 200 {
 			t.Fatalf("got %d %s", res.status, res.body)
 		}
 		if row := g.row(t, res.rid); !strings.Contains(gjson.Get(row.AttemptLog, "0.error").Str, "timeout") {
 			t.Errorf("attempt_log = %s", row.AttemptLog)
+		}
+		if got := breakerState(g); got != "open" {
+			t.Errorf("breaker = %s, want open: no response headers counts", got)
 		}
 	})
 }
@@ -806,18 +828,6 @@ func TestBreaker(t *testing.T) {
 	block.Store(false)
 	if res := g.post(t, "/v1/chat/completions", chatBody); res.body != `{"from":"a"}` {
 		t.Fatalf("closed breaker: got %s", res.body)
-	}
-}
-
-func TestBreakerIgnoresAuthAndNotFound(t *testing.T) {
-	a := newUpstream(t, reply(401, `{}`))
-	b := newUpstream(t, reply(200, `{}`))
-	g := newGateway(t, twoTargets(a.URL, b.URL, "breaker:\n  failure_threshold: 1\n"+noAffinity))
-	for range 3 {
-		g.post(t, "/v1/chat/completions", chatBody)
-	}
-	if a.count() != 3 || g.h.rt.Load().breakers.State("a.chat").State != "closed" {
-		t.Errorf("401 fed the breaker: a got %d, state %+v", a.count(), g.h.rt.Load().breakers.State("a.chat"))
 	}
 }
 
