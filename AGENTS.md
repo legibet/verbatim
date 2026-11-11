@@ -41,4 +41,4 @@ Versions are semver tags, `v0.x` until the configuration format is stable. To re
 git tag -a v0.2.0 -F notes.md && git push origin v0.2.0
 ```
 
-The Release workflow tests, builds an archive per platform, and publishes a GitHub release with the tag message as its notes. CI runs on every push and pull request, including a check that `internal/ui/dist` matches a fresh build of `web/`.
+The Release workflow runs the CI checks on the tagged commit, builds an archive per platform, and publishes a GitHub release with the tag message as its notes. CI runs on every push and pull request, including a check that `internal/ui/dist` matches a fresh build of `web/`.
