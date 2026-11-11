@@ -247,9 +247,9 @@ async function requestJSON<T>(path: string, guard: (v: unknown) => v is T, init:
   return body
 }
 
-// useApi fetches path (null: nothing) and refetches every pollMs when given.
+// useApi fetches path and refetches every pollMs when given.
 // Data from the previous path stays visible while the next one loads.
-export function useApi<T>(path: string | null, guard: (v: unknown) => v is T, pollMs?: number) {
+export function useApi<T>(path: string, guard: (v: unknown) => v is T, pollMs?: number) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(false)
@@ -259,7 +259,6 @@ export function useApi<T>(path: string | null, guard: (v: unknown) => v is T, po
   const reload = useCallback(() => setTick((t) => t + 1), [])
 
   useEffect(() => {
-    if (path === null) return
     const ctl = new AbortController()
     let timer: number | undefined
     const run = async (first: boolean) => {

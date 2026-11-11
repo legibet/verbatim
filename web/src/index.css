@@ -40,8 +40,6 @@
   --popover-foreground: var(--foreground);
   --primary: var(--foreground);
   --primary-foreground: var(--background);
-  --secondary: var(--muted);
-  --secondary-foreground: var(--foreground);
   --accent: var(--muted);
   --accent-foreground: var(--foreground);
   --destructive: var(--err);
@@ -53,7 +51,6 @@
   --ok-ink: oklch(0.45 0.1 150);
   --warn-ink: oklch(0.5 0.11 65);
   --err-ink: oklch(0.5 0.17 28);
-  --info-ink: oklch(0.48 0.12 250);
   --flash: oklch(0.93 0.04 85);
 }
 
@@ -78,7 +75,6 @@
     --ok-ink: oklch(0.78 0.12 150);
     --warn-ink: oklch(0.82 0.12 75);
     --err-ink: oklch(0.75 0.15 28);
-    --info-ink: oklch(0.76 0.1 250);
     --flash: oklch(0.29 0.03 85);
   }
 }
@@ -101,8 +97,6 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
@@ -113,7 +107,6 @@
   --color-ok-ink: var(--ok-ink);
   --color-warn-ink: var(--warn-ink);
   --color-err-ink: var(--err-ink);
-  --color-info-ink: var(--info-ink);
 
   /* Radius scale: marks 2px, controls 4px, panels 6px. */
   --radius-xs: 2px;

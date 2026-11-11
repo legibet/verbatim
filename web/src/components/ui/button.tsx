@@ -1,7 +1,6 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
-import { Slot } from "radix-ui"
 
 // Every button acknowledges the press with a small scale-down.
 const buttonVariants = cva(
@@ -13,12 +12,10 @@ const buttonVariants = cva(
         outline:
           "border border-input bg-background text-foreground [@media(hover:hover)]:hover:bg-muted",
         ghost: "text-muted-foreground [@media(hover:hover)]:hover:bg-muted [@media(hover:hover)]:hover:text-foreground",
-        link: "h-auto px-0 text-muted-foreground underline-offset-4 [@media(hover:hover)]:hover:text-foreground [@media(hover:hover)]:hover:underline",
       },
       size: {
         default: "h-8 px-3",
         sm: "h-7 px-2.5",
-        icon: "size-8",
         "icon-sm": "size-7",
       },
     },
@@ -33,16 +30,10 @@ function Button({
   className,
   variant = "default",
   size = "default",
-  asChild = false,
   ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-  }) {
-  const Comp = asChild ? Slot.Root : "button"
-
+}: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants>) {
   return (
-    <Comp
+    <button
       data-slot="button"
       data-variant={variant}
       data-size={size}
@@ -52,4 +43,4 @@ function Button({
   )
 }
 
-export { Button, buttonVariants }
+export { Button }
