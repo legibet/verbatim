@@ -70,14 +70,17 @@ export function Usage() {
               title="Cost per day"
               unit="USD, UTC days"
               days={data.daily}
+              total={data.total}
               range={params}
               value={costOf}
               fmt={fmtCost}
+              known={priced}
             />
             <DayChart
               title="Tokens per day"
               unit="all kinds, UTC days"
               days={data.daily}
+              total={data.total}
               range={params}
               value={tokensOf}
               fmt={fmtInt}
@@ -126,6 +129,10 @@ const costOf = (a: Aggregate) => a.cost_usd
 const tokensOf = (a: Aggregate) => a.input_tokens + a.cache_read_tokens + a.cache_write_tokens + a.output_tokens
 const fmtCost = (v: number) => "$" + fmtUSD(v)
 
+// priced reports whether any request behind an aggregate has a cost; where
+// none has, the cost shows as a dash rather than $0.
+const priced = (a: Aggregate) => a.requests - a.unpriced - a.no_usage > 0
+
 function Totals({ t }: { t: Aggregate }) {
   const cells: { label: string; value: ReactNode; tone?: string }[] = [
     { label: "Requests", value: fmtInt(t.requests) },
@@ -135,7 +142,7 @@ function Totals({ t }: { t: Aggregate }) {
     { label: "Cache write", value: fmtInt(t.cache_write_tokens) },
     { label: "Output", value: fmtInt(t.output_tokens) },
     { label: "Reasoning", value: fmtInt(t.reasoning_tokens) },
-    { label: "Cost", value: t.requests - t.unpriced - t.no_usage > 0 ? `$${fmtUSD(t.cost_usd)}` : <Dash /> },
+    { label: "Cost", value: priced(t) ? `$${fmtUSD(t.cost_usd)}` : <Dash /> },
   ]
   return (
     <div>
@@ -179,7 +186,7 @@ function Breakdown({ rows, total, by }: { rows: Aggregate[]; total: Aggregate; b
     { label: "Cache write", get: (a) => fmtInt(a.cache_write_tokens) },
     { label: "Output", get: (a) => fmtInt(a.output_tokens) },
     { label: "Reasoning", get: (a) => fmtInt(a.reasoning_tokens) },
-    { label: "Cost USD", get: (a) => (a.requests - a.unpriced - a.no_usage > 0 ? fmtUSD(a.cost_usd) : <Dash />) },
+    { label: "Cost USD", get: (a) => (priced(a) ? fmtUSD(a.cost_usd) : <Dash />) },
     { label: "Unpriced", get: (a) => (a.unpriced ? <span className="text-warn-ink">{fmtInt(a.unpriced)}</span> : <Dash />) },
     { label: "No usage", get: (a) => (a.no_usage ? fmtInt(a.no_usage) : <Dash />) },
   ]
@@ -251,20 +258,27 @@ function useDark(): boolean {
   return dark
 }
 
+// DayChart plots value per UTC day. Its header shows the range total, or the
+// hovered day's value; when known is given, a total or day it rejects, or a
+// day without requests, shows a dash instead.
 function DayChart({
   title,
   unit,
   days,
+  total,
   range,
   value,
   fmt,
+  known,
 }: {
   title: string
   unit: string
   days: Aggregate[]
+  total: Aggregate
   range: Record<string, string>
   value: (a: Aggregate) => number
   fmt: (v: number) => string
+  known?: (a: Aggregate) => boolean
 }) {
   const el = useRef<HTMLDivElement>(null)
   const dark = useDark()
@@ -275,7 +289,8 @@ function DayChart({
     const byKey = new Map(days.map((d) => [d.key, value(d)]))
     return keys.map((k) => byKey.get(k) ?? 0)
   }, [keys, days, value])
-  const total = values.reduce((s, v) => s + v, 0)
+  const amount = (a: Aggregate | undefined) =>
+    known && !(a && known(a)) ? <Dash /> : <span className="text-foreground">{fmt(a ? value(a) : 0)}</span>
 
   useEffect(() => {
     const node = el.current
@@ -335,12 +350,10 @@ function DayChart({
         <span className="num whitespace-nowrap text-muted-foreground">
           {hover !== null && keys[hover] ? (
             <>
-              {keys[hover]} <span className="text-foreground">{fmt(values[hover])}</span>
+              {keys[hover]} {amount(days.find((d) => d.key === keys[hover]))}
             </>
           ) : (
-            <>
-              total <span className="text-foreground">{fmt(total)}</span>
-            </>
+            <>total {amount(total)}</>
           )}
         </span>
       </div>

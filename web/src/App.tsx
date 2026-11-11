@@ -46,7 +46,7 @@ export function App() {
     <TooltipProvider delayDuration={250}>
       <div className="flex h-dvh flex-col">
         <header className="shrink-0 border-b">
-          <div className="mx-auto flex h-12 max-w-[1600px] items-center gap-8 px-6">
+          <div className="mx-auto flex h-12 max-w-[1600px] items-center gap-4 px-6 sm:gap-8">
             <a href="#/requests" className="font-mono text-[13px] font-medium tracking-tight">
               verbatim
             </a>
@@ -57,8 +57,8 @@ export function App() {
                   href={`#/${n.view}`}
                   aria-current={route.view === n.view ? "page" : undefined}
                   className={cn(
-                    "relative flex items-center px-2.5 text-muted-foreground outline-none focus-visible:text-foreground focus-visible:underline [@media(hover:hover)]:hover:text-foreground",
-                    "aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-2.5 aria-[current=page]:after:-bottom-px aria-[current=page]:after:h-px aria-[current=page]:after:bg-foreground",
+                    "relative flex items-center px-0.5 text-muted-foreground outline-none focus-visible:text-foreground focus-visible:underline sm:px-2.5 [@media(hover:hover)]:hover:text-foreground",
+                    "aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0.5 aria-[current=page]:after:-bottom-px aria-[current=page]:after:h-px aria-[current=page]:after:bg-foreground sm:aria-[current=page]:after:inset-x-2.5",
                   )}
                 >
                   {n.label}
